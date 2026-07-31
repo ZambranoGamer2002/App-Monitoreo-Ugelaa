@@ -33,7 +33,9 @@ import com.ugelaa.monitoreo.ui.theme.AzulPrincipal
 import com.ugelaa.monitoreo.ui.theme.GrisFondoApp
 import com.ugelaa.monitoreo.ui.theme.GrisTexto
 import kotlinx.coroutines.launch
+import androidx.compose.material.icons.filled.WifiOff
 import com.ugelaa.monitoreo.utils.observeConnectivityAsFlow
+import com.ugelaa.monitoreo.utils.SessionManager
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -43,9 +45,12 @@ fun HomeScreen(navController: NavController, nombreUser: String, nicknameUser: S
     val scope = rememberCoroutineScope()
     var pantallaActual by remember { mutableStateOf("Inicio") }
 
-    //Detector de internet
+    //Estado para controlar si se muestra el cuadro de confirmación
+    var mostrarDialogoCerrarSesion by remember { mutableStateOf(false) }
+
     val context = LocalContext.current
     val isOnline by observeConnectivityAsFlow(context).collectAsState(initial = true)
+    val sessionManager = remember { SessionManager(context) }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -70,7 +75,7 @@ fun HomeScreen(navController: NavController, nombreUser: String, nicknameUser: S
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Aviso del offline
+                // Aviso del modo Offline
                 if (!isOnline) {
                     Surface(
                         color = Color(0xFFD32F2F).copy(alpha = 0.15f), // Rojo transparente y suave
@@ -121,10 +126,8 @@ fun HomeScreen(navController: NavController, nombreUser: String, nicknameUser: S
                     label = "Cerrar Sesión",
                     isSelected = false,
                     onClick = {
-                        scope.launch { drawerState.close() }
-                        navController.navigate("login_screen") {
-                            popUpTo(0) { inclusive = true }
-                        }
+                        //En lugar de cerrar de golpe, mostramos la alerta
+                        mostrarDialogoCerrarSesion = true
                     }
                 )
                 Spacer(modifier = Modifier.height(32.dp))
@@ -144,10 +147,52 @@ fun HomeScreen(navController: NavController, nombreUser: String, nicknameUser: S
 
                 when (pantallaActual) {
                     "Inicio" -> PantallaInicio(nombreUser)
-                    //Pasamos el nickname a la vista
                     "Datos Personales" -> PantallaDatosPersonales(nombreUser, nicknameUser)
                     "Visitas" -> PantallaVisitas(navController)
                 }
+            }
+
+            if (mostrarDialogoCerrarSesion) {
+                AlertDialog(
+                    onDismissRequest = { mostrarDialogoCerrarSesion = false },
+                    title = {
+                        Text(text = "Cerrar Sesión", fontWeight = FontWeight.Bold, color = AsideFondo)
+                    },
+                    text = {
+                        Text(
+                            text = "¿Estás seguro de que deseas salir?",
+                            color = GrisTexto
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                mostrarDialogoCerrarSesion = false
+                                scope.launch {
+                                    drawerState.close()
+                                    sessionManager.limpiarSesion()
+                                    navController.navigate("login_screen") {
+                                        popUpTo(0) { inclusive = true }
+                                    }
+                                }
+                            }
+                        ) {
+                            Text("SÍ, SALIR", color = Color(0xFFD32F2F), fontWeight = FontWeight.Bold) // Texto en rojo de alerta
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(
+                            onClick = {
+                                // Si dice que no, solo cerramos la alerta
+                                mostrarDialogoCerrarSesion = false
+                            }
+                        ) {
+                            Text("NO", color = AzulPrincipal, fontWeight = FontWeight.Bold)
+                        }
+                    },
+                    containerColor = Color.White,
+                    shape = RoundedCornerShape(16.dp)
+                )
             }
         }
     }

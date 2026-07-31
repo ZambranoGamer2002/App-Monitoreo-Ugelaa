@@ -95,7 +95,7 @@ fun LoginScreen(navController: NavController) {
                     OutlinedTextField(
                         value = usuarioInput,
                         onValueChange = { usuarioInput = it },
-                        label = { Text("Usuario / Nickname") },
+                        label = { Text("Usuario") },
                         leadingIcon = { Icon(Icons.Filled.Person, contentDescription = null, tint = AzulPrincipal) },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
