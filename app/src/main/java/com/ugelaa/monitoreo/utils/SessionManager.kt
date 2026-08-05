@@ -7,12 +7,10 @@ import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
-//Creamos el archivo físico donde se guardarán los datos
 val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "sesion_docente")
 
 class SessionManager(private val context: Context) {
 
-    //Definimos las "Llaves" para cada dato que queremos guardar
     companion object {
         val IS_LOGGED_IN = booleanPreferencesKey("is_logged_in")
         val TOKEN = stringPreferencesKey("auth_token")
@@ -20,7 +18,7 @@ class SessionManager(private val context: Context) {
         val NICKNAME = stringPreferencesKey("user_nickname")
     }
 
-    //Función para GUARDAR la sesión al hacer Login exitoso
+    // Función para GUARDAR la sesión al hacer Login exitoso
     suspend fun guardarSesion(token: String, nombre: String, nickname: String) {
         context.dataStore.edit { preferences ->
             preferences[IS_LOGGED_IN] = true
@@ -30,14 +28,14 @@ class SessionManager(private val context: Context) {
         }
     }
 
-    //Función para CERRAR sesión
+    // Función para CERRAR sesión
     suspend fun limpiarSesion() {
         context.dataStore.edit { preferences ->
-            preferences.clear() // Borra todo
+            preferences.clear()
         }
     }
 
-    //Funciones para LEER si está logueado
+    // Funciones reactivas para LEER los datos en tiempo real
     val isLoggedIn: Flow<Boolean> = context.dataStore.data.map { preferences ->
         preferences[IS_LOGGED_IN] ?: false
     }
@@ -48,5 +46,9 @@ class SessionManager(private val context: Context) {
 
     val getNickname: Flow<String> = context.dataStore.data.map { preferences ->
         preferences[NICKNAME] ?: ""
+    }
+
+    val getToken: Flow<String> = context.dataStore.data.map { preferences ->
+        preferences[TOKEN] ?: ""
     }
 }

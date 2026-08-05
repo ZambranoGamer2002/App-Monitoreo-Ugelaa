@@ -7,10 +7,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.NavType
@@ -46,38 +43,30 @@ class MainActivity : ComponentActivity() {
 fun AppNavigation() {
     val navController = rememberNavController()
     val context = LocalContext.current
-
-    //Instanciamos el manejador de la sesión
     val sessionManager = remember { SessionManager(context) }
 
-    //Leemos el estado de la sesión de forma reactiva desde la memoria del teléfono
     val isLoggedIn by sessionManager.isLoggedIn.collectAsState(initial = null)
     val nombreGuardado by sessionManager.getNombre.collectAsState(initial = "")
     val nicknameGuardado by sessionManager.getNickname.collectAsState(initial = "")
 
-    if (isLoggedIn == null) {
+    var startRoute by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(isLoggedIn) {
+        if (startRoute == null && isLoggedIn != null) {
+            startRoute = if (isLoggedIn == true) "home_monitoreo_directo" else "login_screen"
+        }
+    }
+
+    if (startRoute == null) {
         SplashScreen(navController = navController)
         return
     }
 
-    // Decidimos la ruta de inicio basados en la sesión
-    val startRoute = if (isLoggedIn == true) {
-        "home_monitoreo_directo"
-    } else {
-        "login_screen"
-    }
+    NavHost(navController = navController, startDestination = startRoute!!) {
 
-    NavHost(navController = navController, startDestination = startRoute) {
+        composable("splash_screen") { SplashScreen(navController = navController) }
+        composable("login_screen") { LoginScreen(navController = navController) }
 
-        composable("splash_screen") {
-            SplashScreen(navController = navController)
-        }
-
-        composable("login_screen") {
-            LoginScreen(navController = navController)
-        }
-
-        //Cuando el usuario viene del Login
         composable(
             route = "home_monitoreo/{nombre}/{nickname}",
             arguments = listOf(
@@ -87,17 +76,24 @@ fun AppNavigation() {
         ) { backStackEntry ->
             val nombre = backStackEntry.arguments?.getString("nombre") ?: "Docente"
             val nickname = backStackEntry.arguments?.getString("nickname") ?: ""
-
             HomeScreen(navController = navController, nombreUser = nombre, nicknameUser = nickname)
         }
 
-        //Cuando la app se abre y ya había sesión guardada
         composable("home_monitoreo_directo") {
             HomeScreen(navController = navController, nombreUser = nombreGuardado, nicknameUser = nicknameGuardado)
         }
 
-        composable("captura_visita") {
-            CapturaScreen(navController = navController)
+        // ¡RUTA ACTUALIZADA! Ahora recibe el ID de la visita también
+        composable(
+            route = "captura_visita/{idVisita}/{nombrePlan}",
+            arguments = listOf(
+                navArgument("idVisita") { type = NavType.StringType },
+                navArgument("nombrePlan") { type = NavType.StringType }
+            )
+        ) { backStackEntry ->
+            val idVisita = backStackEntry.arguments?.getString("idVisita") ?: "0"
+            val nombrePlan = backStackEntry.arguments?.getString("nombrePlan") ?: "Visita"
+            CapturaScreen(navController = navController, idVisita = idVisita, nombrePlan = nombrePlan)
         }
     }
 }
