@@ -38,18 +38,26 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.navigation.NavController
+import androidx.work.Constraints
+import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
 import com.ugelaa.monitoreo.R
+import com.ugelaa.monitoreo.data.RetrofitClient
+import com.ugelaa.monitoreo.data.local.AppDatabase
+import com.ugelaa.monitoreo.data.local.SyncWorker
+import com.ugelaa.monitoreo.model.Visita
 import com.ugelaa.monitoreo.ui.theme.AsideFondo
 import com.ugelaa.monitoreo.ui.theme.AzulPrincipal
 import com.ugelaa.monitoreo.ui.theme.GrisFondoApp
 import com.ugelaa.monitoreo.ui.theme.GrisTexto
-import kotlinx.coroutines.launch
-import com.ugelaa.monitoreo.data.RetrofitClient
-import com.ugelaa.monitoreo.model.Visita
-import com.ugelaa.monitoreo.utils.observeConnectivityAsFlow
 import com.ugelaa.monitoreo.utils.SessionManager
+import com.ugelaa.monitoreo.utils.observeConnectivityAsFlow
+import kotlinx.coroutines.launch
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -65,6 +73,13 @@ fun HomeScreen(navController: NavController, nombreUser: String, nicknameUser: S
     val sessionManager = remember { SessionManager(context) }
 
     val tokenGuardado by sessionManager.getToken.collectAsState(initial = "")
+
+    //Programar la sincronización automática si hay señal
+    LaunchedEffect(isOnline) {
+        if (isOnline) {
+            iniciarSincronizacion(context)
+        }
+    }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -176,23 +191,39 @@ fun HomeScreen(navController: NavController, nombreUser: String, nicknameUser: S
 }
 
 // -------------------------------------------------------------------------
-// PANTALLA DE VISITAS CON INDICADOR DE ESTADO
+// PANTALLA DE VISITAS CON CONTADOR DE REGISTROS OFFLINE
 // -------------------------------------------------------------------------
 @Composable
 fun PantallaVisitas(navController: NavController, token: String) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
-    // Instancia de la memoria interna donde guardamos el estado de cada visita
     val sharedPref = context.getSharedPreferences("EstadoVisitas", Context.MODE_PRIVATE)
+    val sharedPrefCache = context.getSharedPreferences("CacheVisitas", Context.MODE_PRIVATE) // <-- Bóveda de texto
+    val visitaDao = remember { AppDatabase.getDatabase(context).visitaDao() }
+    val gson = remember { Gson() } // <-- Traductor de listas
 
     var listaVisitas by remember { mutableStateOf<List<Visita>>(emptyList()) }
+    var cantidadPendientesOffline by remember { mutableStateOf(0) }
     var isLoading by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf("") }
 
     var isGpsEnabled by remember { mutableStateOf(checkGpsStatus(context)) }
     var isAutoTimeEnabled by remember { mutableStateOf(checkAutoTimeEnabled(context)) }
     val isSystemReady = isGpsEnabled && isAutoTimeEnabled
+
+    // 1. CARGAR DESDE LA MEMORIA CACHÉ PRIMERO (Magia Offline)
+    LaunchedEffect(Unit) {
+        val jsonGuardado = sharedPrefCache.getString("planes_offline", null)
+        if (jsonGuardado != null) {
+            val type = object : TypeToken<List<Visita>>() {}.type
+            listaVisitas = gson.fromJson(jsonGuardado, type)
+        }
+
+        // Cargar contador de fotos pendientes
+        val pendientes = visitaDao.obtenerEvidenciasPendientes()
+        cantidadPendientesOffline = pendientes.size
+    }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -205,18 +236,21 @@ fun PantallaVisitas(navController: NavController, token: String) {
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
+    // 2. ACTUALIZAR CON INTERNET (Si hay señal)
     LaunchedEffect(token) {
         if (token.isNotEmpty()) {
             try {
-                isLoading = true
+                isLoading = listaVisitas.isEmpty() // Solo muestra la bolita de carga si la pantalla está vacía
                 val response = RetrofitClient.apiService.getVisitas("Bearer $token")
                 if (response.isSuccessful && response.body() != null) {
                     listaVisitas = response.body()!!
+                    // ¡ACTUALIZAMOS LA COPIA DE SEGURIDAD EN EL CELULAR!
+                    sharedPrefCache.edit().putString("planes_offline", gson.toJson(listaVisitas)).apply()
                 } else {
                     errorMessage = "Error de servidor. Código: ${response.code()}"
                 }
             } catch (e: Exception) {
-                errorMessage = "Error de conexión: Verifica tu internet o el backend."
+                errorMessage = "Sin conexión a internet. Mostrando vista local."
             } finally {
                 isLoading = false
             }
@@ -226,6 +260,24 @@ fun PantallaVisitas(navController: NavController, token: String) {
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp).verticalScroll(rememberScrollState())) {
         Spacer(modifier = Modifier.height(24.dp))
         Text(text = "Tus Visitas Programadas", fontWeight = FontWeight.ExtraBold, fontSize = 22.sp, color = AsideFondo)
+
+        // --- BANNER DE EVIDENCIAS PENDIENTES DE SUBIR (OFFLINE) ---
+        if (cantidadPendientesOffline > 0) {
+            Surface(
+                color = Color(0xFFFFF3E0),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.padding(top = 12.dp, bottom = 8.dp).fillMaxWidth()
+            ) {
+                Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Filled.CloudUpload, contentDescription = null, tint = Color(0xFFE65100))
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Tienes $cantidadPendientesOffline registro(s) guardado(s) en el celular", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color(0xFFE65100))
+                        Text("Se subirán automáticamente al servidor cuando haya internet.", fontSize = 11.sp, color = Color.DarkGray)
+                    }
+                }
+            }
+        }
 
         if (!isSystemReady) {
             Surface(
@@ -240,23 +292,8 @@ fun PantallaVisitas(navController: NavController, token: String) {
                         Text("SISTEMA NO REQUERIDO ACTIVADO", color = Color(0xFFC62828), fontSize = 13.sp, fontWeight = FontWeight.Bold)
                     }
                     Spacer(modifier = Modifier.height(6.dp))
-
-                    if (!isGpsEnabled) Text("• El GPS está APAGADO. Debes encenderlo para realizar monitoreos.", color = Color(0xFFB71C1C), fontSize = 12.sp)
-                    if (!isAutoTimeEnabled) Text("• La 'Hora Automática' está DESACTIVADA. Debes activarla en Ajustes.", color = Color(0xFFB71C1C), fontSize = 12.sp)
-
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
-                        if (!isGpsEnabled) {
-                            TextButton(onClick = { context.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)) }) {
-                                Text("ENCENDER GPS", color = AzulPrincipal, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            }
-                        }
-                        if (!isAutoTimeEnabled) {
-                            TextButton(onClick = { context.startActivity(Intent(Settings.ACTION_DATE_SETTINGS)) }) {
-                                Text("ACTIVAR HORA", color = AzulPrincipal, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            }
-                        }
-                    }
+                    if (!isGpsEnabled) Text("• El GPS está APAGADO. Debes encenderlo.", color = Color(0xFFB71C1C), fontSize = 12.sp)
+                    if (!isAutoTimeEnabled) Text("• La 'Hora Automática' está DESACTIVADA.", color = Color(0xFFB71C1C), fontSize = 12.sp)
                 }
             }
         } else {
@@ -267,21 +304,16 @@ fun PantallaVisitas(navController: NavController, token: String) {
             Box(modifier = Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = AzulPrincipal)
             }
-        } else if (errorMessage.isNotEmpty()) {
-            Surface(color = Color(0xFFFFEBEE), shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth()) {
-                Text(text = errorMessage, color = Color(0xFFD32F2F), modifier = Modifier.padding(16.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-            }
         } else if (listaVisitas.isEmpty()) {
-            Text(text = "No tienes visitas asignadas por el momento.", modifier = Modifier.fillMaxWidth().padding(top = 32.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center, color = GrisTexto)
+            Text(text = "No hay visitas para mostrar.", modifier = Modifier.fillMaxWidth().padding(top = 32.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center, color = GrisTexto)
         } else {
             listaVisitas.forEach { visita ->
-                // ¡AQUÍ ESTÁ LA MAGIA DEL ESTADO DINÁMICO!
                 val estadoMemoria = sharedPref.getString("visita_${visita.id}", "ENTRADA")
 
                 val (textoEstado, colorEstado) = when (estadoMemoria) {
-                    "COMPLETADO" -> Pair("FINALIZADA", Color(0xFF4CAF50)) // Verde
-                    "SALIDA" -> Pair("EN CURSO", Color(0xFFF57C00)) // Naranja
-                    else -> Pair("PENDIENTE", AzulPrincipal) // Azul por defecto
+                    "COMPLETADO" -> Pair("FINALIZADA", Color(0xFF4CAF50))
+                    "SALIDA" -> Pair("EN CURSO", Color(0xFFF57C00))
+                    else -> Pair("PENDIENTE", AzulPrincipal)
                 }
 
                 VisitaCardPremium(
@@ -290,15 +322,15 @@ fun PantallaVisitas(navController: NavController, token: String) {
                     lugar = visita.lugar_visita,
                     fecha = "Del ${visita.fecha_inicio} al ${visita.fecha_fin}",
                     estado = textoEstado,
-                    colorBadge = colorEstado, // Enviamos el color a la tarjeta
+                    colorBadge = colorEstado,
                     onClick = {
                         if (isSystemReady) {
                             val idCodificado = visita.id.toString()
-                            val nombreCodificado = URLEncoder.encode(visita.nombre_visitas, StandardCharsets.UTF_8.toString())
+                            val nombreCodificado = java.net.URLEncoder.encode(visita.nombre_visitas, java.nio.charset.StandardCharsets.UTF_8.toString())
                             navController.navigate("captura_visita/$idCodificado/$nombreCodificado")
                         } else {
-                            if (!isGpsEnabled) context.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
-                            else context.startActivity(Intent(Settings.ACTION_DATE_SETTINGS))
+                            if (!isGpsEnabled) context.startActivity(android.content.Intent(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+                            else context.startActivity(android.content.Intent(android.provider.Settings.ACTION_DATE_SETTINGS))
                         }
                     }
                 )
@@ -308,8 +340,21 @@ fun PantallaVisitas(navController: NavController, token: String) {
     }
 }
 
+//FUNCIÓN PARA DISPARAR EL WORKMANAGER
+fun iniciarSincronizacion(context: Context) {
+    val constraints = Constraints.Builder()
+        .setRequiredNetworkType(NetworkType.CONNECTED) // Solo se ejecuta si hay INTERNET
+        .build()
+
+    val syncRequest = OneTimeWorkRequestBuilder<SyncWorker>()
+        .setConstraints(constraints)
+        .build()
+
+    WorkManager.getInstance(context).enqueue(syncRequest)
+}
+
 // -------------------------------------------------------------------------
-// COMPONENTES RESTANTES
+// OTROS COMPONENTES
 // -------------------------------------------------------------------------
 @Composable
 fun PantallaConfiguracion() {
@@ -351,7 +396,7 @@ fun PantallaConfiguracion() {
             context.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
         }
         Spacer(modifier = Modifier.height(16.dp))
-        ItemConfiguracion("Hora Automática (Red)", "Garantiza que la hora de la evidencia sea 100% real.", isAutoTimeEnabled, Icons.Filled.Schedule) {
+        ItemConfiguracion("Hora Automática (Red)", "Garantiza que la hora sea 100% real.", isAutoTimeEnabled, Icons.Filled.Schedule) {
             context.startActivity(Intent(Settings.ACTION_DATE_SETTINGS))
         }
         Spacer(modifier = Modifier.height(32.dp))
@@ -390,7 +435,7 @@ fun PantallaInicio(nombreUser: String) {
         Spacer(modifier = Modifier.height(24.dp))
         Text(text = "¡Bienvenido, $nombreUser!", fontWeight = FontWeight.ExtraBold, fontSize = 28.sp, color = AsideFondo, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
         Spacer(modifier = Modifier.height(12.dp))
-        Text(text = "Desde aquí podrás gestionar tus visitas de monitoreo, actualizar tus datos y reportar evidencias en tiempo real.", color = GrisTexto, fontSize = 16.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center, lineHeight = 24.sp)
+        Text(text = "Desde aquí podrás gestionar tus visitas de monitoreo, actualizar tus datos y reportar evidencias en tiempo real o en modo offline.", color = GrisTexto, fontSize = 16.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center, lineHeight = 24.sp)
     }
 }
 
@@ -440,7 +485,6 @@ fun DrawerItemModern(icon: ImageVector, label: String, isSelected: Boolean, onCl
     }
 }
 
-// SE AÑADIÓ EL PARÁMETRO colorBadge PARA EL SEMÁFORO VISUAL
 @Composable
 fun VisitaCardPremium(nombrePlan: String, asunto: String, lugar: String, fecha: String, estado: String, colorBadge: Color, onClick: () -> Unit) {
     ElevatedCard(onClick = onClick, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp), colors = CardDefaults.elevatedCardColors(containerColor = Color.White), elevation = CardDefaults.elevatedCardElevation(defaultElevation = 6.dp)) {

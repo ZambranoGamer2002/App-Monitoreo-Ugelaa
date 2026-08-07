@@ -36,11 +36,14 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.navigation.NavController
 import com.ugelaa.monitoreo.data.RetrofitClient
+import com.ugelaa.monitoreo.data.local.AppDatabase
+import com.ugelaa.monitoreo.data.local.VisitaEvidenciaEntity
 import com.ugelaa.monitoreo.ui.theme.AsideFondo
 import com.ugelaa.monitoreo.ui.theme.AzulPrincipal
 import com.ugelaa.monitoreo.ui.theme.GrisFondoApp
 import com.ugelaa.monitoreo.ui.theme.GrisTexto
 import com.ugelaa.monitoreo.utils.SessionManager
+import com.ugelaa.monitoreo.utils.observeConnectivityAsFlow
 import kotlinx.coroutines.launch
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
@@ -61,6 +64,10 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
     val sessionManager = remember { SessionManager(context) }
     val coroutineScope = rememberCoroutineScope()
 
+    // --- INSTANCIAS DE BÓVEDA Y CONECTIVIDAD ---
+    val isOnline by observeConnectivityAsFlow(context).collectAsState(initial = true)
+    val visitaDao = remember { AppDatabase.getDatabase(context).visitaDao() }
+
     val nombrePlanLimpio = remember(nombrePlan) {
         try { URLDecoder.decode(nombrePlan, "UTF-8") } catch (e: Exception) { nombrePlan.replace("+", " ") }
     }
@@ -68,9 +75,11 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
     val nicknameUsuario by sessionManager.getNickname.collectAsState(initial = "Cargando...")
     val tokenGuardado by sessionManager.getToken.collectAsState(initial = "")
 
+    // MEMORIA PERSISTENTE DE PANTALLAS
     val sharedPref = context.getSharedPreferences("EstadoVisitas", Context.MODE_PRIVATE)
     var estadoActual by remember { mutableStateOf(sharedPref.getString("visita_$idVisita", "ENTRADA") ?: "ENTRADA") }
 
+    // SEGURIDAD ANTI-TRAMPAS
     var isGpsEnabled by remember { mutableStateOf(checkGpsStatusLocal(context)) }
     var isAutoTimeEnabled by remember { mutableStateOf(checkAutoTimeEnabledLocal(context)) }
     val isSystemReady = isGpsEnabled && isAutoTimeEnabled
@@ -86,7 +95,7 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    //VARIABLES DE INTERFAZ Y FLUJO
+    // VARIABLES DE INTERFAZ
     var isUploading by remember { mutableStateOf(false) }
     var serverErrorDetails by remember { mutableStateOf("") }
 
@@ -97,13 +106,22 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
     var bitmapCaptura by remember { mutableStateOf<Bitmap?>(null) }
     var fechaCaptura by remember { mutableStateOf("") }
     var horaCaptura by remember { mutableStateOf("") }
+    var anioCaptura by remember { mutableStateOf("") }
+    var mesCaptura by remember { mutableStateOf("") }
+    var numeroMesCaptura by remember { mutableStateOf("") }
 
     val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicturePreview()) { bitmap ->
         if (bitmap != null) {
             bitmapCaptura = bitmap
             val now = Date()
-            fechaCaptura = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(now)
-            horaCaptura = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(now)
+            val localeEs = Locale("es", "ES")
+
+            fechaCaptura = SimpleDateFormat("yyyy-MM-dd", localeEs).format(now)
+            horaCaptura = SimpleDateFormat("HH:mm:ss", localeEs).format(now)
+
+            anioCaptura = SimpleDateFormat("yyyy", localeEs).format(now)                           // Ej: "2026"
+            mesCaptura = SimpleDateFormat("MMMM", localeEs).format(now).uppercase(localeEs)         // Ej: "AGOSTO"
+            numeroMesCaptura = SimpleDateFormat("M", localeEs).format(now)                          // Ej: "8" (1 a 12 sin ceros)
         }
     }
 
@@ -121,6 +139,13 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
                         text = if (estadoActual == "COMPLETADO") "Visita Finalizada" else "Registro de $estadoActual",
                         color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold
                     )
+                }
+            }
+
+            // INDICADOR DE CONEXIÓN
+            if (!isOnline) {
+                Box(modifier = Modifier.fillMaxWidth().background(Color(0xFFEF5350)).padding(4.dp), contentAlignment = Alignment.Center) {
+                    Text("MODO OFFLINE ACTIVADO - Los datos se guardarán en el teléfono", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 }
             }
 
@@ -163,33 +188,21 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
 
                 if (estadoActual == "COMPLETADO") {
                     // PANTALLA COMPLETADA
-                    ElevatedCard(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.elevatedCardColors(containerColor = Color(0xFFE8F5E9))
-                    ) {
+                    ElevatedCard(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), colors = CardDefaults.elevatedCardColors(containerColor = Color(0xFFE8F5E9))) {
                         Column(modifier = Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                             Icon(Icons.Filled.CheckCircle, contentDescription = "Completado", tint = Color(0xFF4CAF50), modifier = Modifier.size(64.dp))
                             Spacer(modifier = Modifier.height(16.dp))
                             Text("¡Proceso Finalizado!", fontWeight = FontWeight.ExtraBold, fontSize = 20.sp, color = Color(0xFF2E7D32))
                             Spacer(modifier = Modifier.height(8.dp))
-                            Text(
-                                "Se han enviado exitosamente las evidencias de ENTRADA y SALIDA para este plan de monitoreo.",
-                                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                                color = Color.DarkGray, fontSize = 14.sp
-                            )
+                            Text("Se han enviado exitosamente las evidencias para este plan.", textAlign = androidx.compose.ui.text.style.TextAlign.Center, color = Color.DarkGray, fontSize = 14.sp)
                             Spacer(modifier = Modifier.height(24.dp))
-                            Button(
-                                onClick = { navController.popBackStack() },
-                                modifier = Modifier.fillMaxWidth().height(48.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
-                            ) {
+                            Button(onClick = { navController.popBackStack() }, modifier = Modifier.fillMaxWidth().height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))) {
                                 Text("VOLVER AL INICIO", color = Color.White, fontWeight = FontWeight.Bold)
                             }
                         }
                     }
                 } else {
-                    //ESTAMOS EN FORMULARIO
+                    // ESTAMOS EN FORMULARIO (ENTRADA o SALIDA)
                     val esEntradaBloqueada = (estadoActual == "ENTRADA" && mostrarTransicionSalida)
                     val descripcionTexto = if (estadoActual == "ENTRADA") "Toma una foto en la puerta o inicio del evento." else "Toma una foto al finalizar tu jornada de monitoreo."
 
@@ -212,10 +225,8 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
                             CircularProgressIndicator(color = AzulPrincipal)
                         }
                     } else if (esEntradaBloqueada) {
-                        // LA ENTRADA YA FUE GUARDADA - BOTÓN PARA AVANZAR A LA SALIDA
                         Button(
                             onClick = {
-
                                 mostrarTransicionSalida = false
                                 estadoActual = "SALIDA"
                                 bitmapCaptura = null
@@ -226,45 +237,73 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
                             colors = ButtonDefaults.buttonColors(containerColor = AzulPrincipal)
                         ) { Text("CONTINUAR A SALIDA", color = Color.White, fontWeight = FontWeight.Bold) }
                     } else {
-                        //BOTÓN NORMAL DE GUARDADO
+                        // BOTÓN NORMAL DE GUARDADO CON LÓGICA OFFLINE/ONLINE
                         Button(
                             onClick = {
                                 coroutineScope.launch {
                                     isUploading = true
                                     serverErrorDetails = ""
                                     try {
-                                        val fileFoto = bitmapToFile(context, bitmapCaptura!!, "${estadoActual.lowercase()}.jpg")
+                                        // 1. Guardamos la foto con un nombre ÚNICO para que no se sobreescriba en Offline
+                                        val nombreArchivo = "visita_${idVisita}_${estadoActual.lowercase()}.jpg"
+                                        val fileFoto = bitmapToFile(context, bitmapCaptura!!, nombreArchivo)
 
-                                        val response = RetrofitClient.apiService.guardarVisita(
-                                            token = "Bearer $tokenGuardado",
-                                            planId = idVisita.toRequestBody("text/plain".toMediaTypeOrNull()),
-                                            usuarioId = nicknameUsuario.toRequestBody("text/plain".toMediaTypeOrNull()),
-                                            estado = estadoActual.toRequestBody("text/plain".toMediaTypeOrNull()),
-                                            fecha = fechaCaptura.toRequestBody("text/plain".toMediaTypeOrNull()),
-                                            hora = horaCaptura.toRequestBody("text/plain".toMediaTypeOrNull()),
-                                            latitud = "-5.90123".toRequestBody("text/plain".toMediaTypeOrNull()),
-                                            longitud = "-76.11000".toRequestBody("text/plain".toMediaTypeOrNull()),
-                                            precisionGps = "15.0".toRequestBody("text/plain".toMediaTypeOrNull()),
-                                            foto = MultipartBody.Part.createFormData("foto", fileFoto.name, fileFoto.asRequestBody("image/jpeg".toMediaTypeOrNull()))
-                                        )
+                                        if (isOnline) {
+                                            //MODO ONLINE DIRECTO A LARAVEL
+                                            val response = RetrofitClient.apiService.guardarVisita(
+                                                token = "Bearer $tokenGuardado",
+                                                planId = idVisita.toRequestBody("text/plain".toMediaTypeOrNull()),
+                                                usuarioId = nicknameUsuario.toRequestBody("text/plain".toMediaTypeOrNull()),
+                                                estado = estadoActual.toRequestBody("text/plain".toMediaTypeOrNull()),
+                                                fecha = fechaCaptura.toRequestBody("text/plain".toMediaTypeOrNull()),
+                                                hora = horaCaptura.toRequestBody("text/plain".toMediaTypeOrNull()),
+                                                anio = anioCaptura.toRequestBody("text/plain".toMediaTypeOrNull()),
+                                                mes = mesCaptura.toRequestBody("text/plain".toMediaTypeOrNull()),
+                                                numeroMes = numeroMesCaptura.toRequestBody("text/plain".toMediaTypeOrNull()),
+                                                latitud = "-5.90123".toRequestBody("text/plain".toMediaTypeOrNull()),
+                                                longitud = "-76.11000".toRequestBody("text/plain".toMediaTypeOrNull()),
+                                                precisionGps = "15.0".toRequestBody("text/plain".toMediaTypeOrNull()),
+                                                foto = MultipartBody.Part.createFormData("foto", fileFoto.name, fileFoto.asRequestBody("image/jpeg".toMediaTypeOrNull()))
+                                            )
 
-                                        if (!response.isSuccessful) {
-                                            val errorBody = response.errorBody()?.string() ?: "Sin detalles."
-                                            serverErrorDetails = "FALLÓ $estadoActual (Código ${response.code()}):\n\n$errorBody"
-                                        } else {
-                                            if (estadoActual == "ENTRADA") {
-
-                                                sharedPref.edit().putString("visita_$idVisita", "SALIDA").apply()
-                                                mensajeExitoDialog = "El registro de ENTRADA se guardó correctamente en el sistema."
-                                                mostrarExitoDialog = true
-                                                mostrarTransicionSalida = true
+                                            if (!response.isSuccessful) {
+                                                val errorBody = response.errorBody()?.string() ?: "Sin detalles."
+                                                serverErrorDetails = "FALLÓ $estadoActual (Código ${response.code()}):\n\n$errorBody"
+                                                return@launch
                                             } else {
-
-                                                sharedPref.edit().putString("visita_$idVisita", "COMPLETADO").apply()
-                                                mensajeExitoDialog = "El registro de SALIDA se guardó correctamente."
-                                                mostrarExitoDialog = true
+                                                mensajeExitoDialog = "El registro se subió y guardó correctamente en el sistema de la UGEL."
                                             }
+                                        } else {
+                                            // 📴 MODO OFFLINE EN BÓVEDA LOCAL
+                                            val nuevaEvidenciaOffline = VisitaEvidenciaEntity(
+                                                planId = idVisita,
+                                                usuarioId = nicknameUsuario,
+                                                estado = estadoActual,
+                                                fecha = fechaCaptura,
+                                                hora = horaCaptura,
+                                                anio = anioCaptura,
+                                                mes = mesCaptura,
+                                                numeroMes = numeroMesCaptura,
+                                                latitud = "-5.90123",
+                                                longitud = "-76.11000",
+                                                precisionGps = "15.0",
+                                                rutaFotoLocal = fileFoto.absolutePath
+                                            )
+                                            visitaDao.insertarEvidencia(nuevaEvidenciaOffline)
+
+                                            mensajeExitoDialog = "Estás sin conexión a Internet. El registro de $estadoActual se guardó de forma segura en tu celular y se subirá automáticamente cuando recuperes la señal."
                                         }
+
+                                        // COMÚN PARA AMBOS (ONLINE / OFFLINE) -> Avanzar de Pantalla
+                                        if (estadoActual == "ENTRADA") {
+                                            sharedPref.edit().putString("visita_$idVisita", "SALIDA").apply()
+                                            mostrarExitoDialog = true
+                                            mostrarTransicionSalida = true
+                                        } else {
+                                            sharedPref.edit().putString("visita_$idVisita", "COMPLETADO").apply()
+                                            mostrarExitoDialog = true
+                                        }
+
                                     } catch (e: Exception) {
                                         serverErrorDetails = "EXCEPCIÓN DE APP/RED:\n\n${e.toString()}"
                                     } finally {
@@ -274,24 +313,26 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
                             },
                             modifier = Modifier.fillMaxWidth().height(56.dp),
                             enabled = bitmapCaptura != null && isSystemReady,
-                            colors = ButtonDefaults.buttonColors(containerColor = AzulPrincipal)
-                        ) { Text("GUARDAR $estadoActual AHORA", color = Color.White, fontWeight = FontWeight.Bold) }
+                            colors = ButtonDefaults.buttonColors(containerColor = if (isOnline) AzulPrincipal else Color(0xFFE65100)) // Botón naranja si está offline
+                        ) {
+                            Text(if (isOnline) "GUARDAR $estadoActual AHORA" else "GUARDAR $estadoActual (OFFLINE)", color = Color.White, fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
             }
         }
 
         // ==========================================
-        // DIÁLOGO DE ÉXITO SIMPLE (SOLO "FINALIZAR")
+        // DIÁLOGO DE ÉXITO
         // ==========================================
         if (mostrarExitoDialog) {
             AlertDialog(
-                onDismissRequest = { /* No hacer nada al tocar fuera, obliga a darle a Finalizar */ },
+                onDismissRequest = { },
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Filled.CheckCircle, null, tint = Color(0xFF4CAF50))
+                        Icon(if (isOnline) Icons.Filled.CheckCircle else Icons.Filled.CloudOff, null, tint = if(isOnline) Color(0xFF4CAF50) else Color(0xFFF57C00))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("¡Guardado Exitoso!", color = AsideFondo, fontWeight = FontWeight.Bold)
+                        Text(if (isOnline) "¡Guardado Exitoso!" else "¡Guardado en Celular!", color = AsideFondo, fontWeight = FontWeight.Bold)
                     }
                 },
                 text = { Text(mensajeExitoDialog, color = GrisTexto) },
@@ -299,21 +340,17 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
                     Button(
                         onClick = {
                             mostrarExitoDialog = false
-                            if (estadoActual == "SALIDA") {
-                                estadoActual = "COMPLETADO" // Actualiza la pantalla a verde final
-                            }
+                            if (estadoActual == "SALIDA") estadoActual = "COMPLETADO"
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = AzulPrincipal)
-                    ) {
-                        Text("FINALIZAR", color = Color.White, fontWeight = FontWeight.Bold)
-                    }
+                    ) { Text("FINALIZAR", color = Color.White, fontWeight = FontWeight.Bold) }
                 },
                 containerColor = Color.White,
                 shape = RoundedCornerShape(16.dp)
             )
         }
 
-        //CONSOLA DE DEPURACIÓN
+        // CONSOLA DE DEPURACIÓN (DEBUGGER)
         if (serverErrorDetails.isNotEmpty()) {
             AlertDialog(
                 onDismissRequest = { serverErrorDetails = "" },
@@ -337,7 +374,7 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
     }
 }
 
-//HERRAMIENTA PARA CONVERTIR FOTOS
+// HERRAMIENTA PARA CONVERTIR FOTOS
 fun bitmapToFile(context: Context, bitmap: Bitmap, fileName: String): File {
     val file = File(context.cacheDir, fileName)
     file.createNewFile()
@@ -351,7 +388,6 @@ fun bitmapToFile(context: Context, bitmap: Bitmap, fileName: String): File {
 fun checkGpsStatusLocal(context: Context): Boolean = (context.getSystemService(Context.LOCATION_SERVICE) as LocationManager).isProviderEnabled(LocationManager.GPS_PROVIDER)
 fun checkAutoTimeEnabledLocal(context: Context): Boolean = try { Settings.Global.getInt(context.contentResolver, Settings.Global.AUTO_TIME) == 1 } catch (e: Exception) { false }
 
-//ACTUALIZACIÓN DE UPLOADZONE PARA SOPORTAR ESTADO "GUARDADO"
 @Composable
 fun UploadZone(titulo: String, descripcion: String, bitmap: Bitmap?, fechaCaptura: String, horaCaptura: String, isEnabled: Boolean, isSaved: Boolean, onClick: () -> Unit) {
     val borderColor = if (isSaved || bitmap != null) Color(0xFF4CAF50) else if (!isEnabled) Color.Red.copy(alpha=0.5f) else AzulPrincipal.copy(alpha = 0.5f)
@@ -383,7 +419,7 @@ fun UploadZone(titulo: String, descripcion: String, bitmap: Bitmap?, fechaCaptur
                     TextButton(onClick = onClick, modifier = Modifier.align(Alignment.End), enabled = isEnabled) { Text("REPETIR FOTO", color = AzulPrincipal, fontSize = 12.sp) }
                 } else {
                     Box(modifier = Modifier.fillMaxWidth().padding(top = 8.dp), contentAlignment = Alignment.CenterEnd) {
-                        Text("✓ Evidencia Enviada y Bloqueada", color = Color(0xFF2E7D32), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Text("✓ Evidencia Bloqueada", color = Color(0xFF2E7D32), fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             } else {
