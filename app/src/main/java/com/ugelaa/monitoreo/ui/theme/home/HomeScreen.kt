@@ -111,7 +111,6 @@ fun HomeScreen(navController: NavController, nombreUser: String, nicknameUser: S
 
                 Divider(color = Color.White.copy(alpha = 0.1f), modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
 
-                // Menú con Regla de Cortesía
                 DrawerItemModern(icon = Icons.Filled.Home, label = "Inicio", isSelected = pantallaActual == "Inicio") {
                     scope.launch { drawerState.close(); pantallaActual = "Inicio" }
                 }
@@ -177,30 +176,35 @@ fun HomeScreen(navController: NavController, nombreUser: String, nicknameUser: S
 }
 
 // -------------------------------------------------------------------------
-// PANTALLA DE VISITAS (Restaurada y Segura)
+// PANTALLA DE VISITAS CON INDICADOR DE ESTADO
 // -------------------------------------------------------------------------
 @Composable
 fun PantallaVisitas(navController: NavController, token: String) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
+    // Instancia de la memoria interna donde guardamos el estado de cada visita
+    val sharedPref = context.getSharedPreferences("EstadoVisitas", Context.MODE_PRIVATE)
+
     var listaVisitas by remember { mutableStateOf<List<Visita>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf("") }
 
     var isGpsEnabled by remember { mutableStateOf(checkGpsStatus(context)) }
+    var isAutoTimeEnabled by remember { mutableStateOf(checkAutoTimeEnabled(context)) }
+    val isSystemReady = isGpsEnabled && isAutoTimeEnabled
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 isGpsEnabled = checkGpsStatus(context)
+                isAutoTimeEnabled = checkAutoTimeEnabled(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    // EL MOTOR DE BÚSQUEDA RESTAURADO
     LaunchedEffect(token) {
         if (token.isNotEmpty()) {
             try {
@@ -223,28 +227,42 @@ fun PantallaVisitas(navController: NavController, token: String) {
         Spacer(modifier = Modifier.height(24.dp))
         Text(text = "Tus Visitas Programadas", fontWeight = FontWeight.ExtraBold, fontSize = 22.sp, color = AsideFondo)
 
-        // Alerta GPS
-        if (!isGpsEnabled) {
+        if (!isSystemReady) {
             Surface(
                 color = Color(0xFFFFEBEE),
-                shape = RoundedCornerShape(8.dp),
-                modifier = Modifier.padding(top = 8.dp, bottom = 16.dp).fillMaxWidth()
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.padding(top = 12.dp, bottom = 16.dp).fillMaxWidth()
             ) {
-                Row(modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Filled.LocationOff, contentDescription = null, tint = Color(0xFFD32F2F), modifier = Modifier.size(20.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "GPS APAGADO: Debes encenderlo para realizar monitoreos.",
-                        color = Color(0xFFC62828),
-                        fontSize = 12.sp, fontWeight = FontWeight.Bold
-                    )
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Filled.Warning, contentDescription = null, tint = Color(0xFFD32F2F), modifier = Modifier.size(20.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("SISTEMA NO REQUERIDO ACTIVADO", color = Color(0xFFC62828), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    if (!isGpsEnabled) Text("• El GPS está APAGADO. Debes encenderlo para realizar monitoreos.", color = Color(0xFFB71C1C), fontSize = 12.sp)
+                    if (!isAutoTimeEnabled) Text("• La 'Hora Automática' está DESACTIVADA. Debes activarla en Ajustes.", color = Color(0xFFB71C1C), fontSize = 12.sp)
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
+                        if (!isGpsEnabled) {
+                            TextButton(onClick = { context.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)) }) {
+                                Text("ENCENDER GPS", color = AzulPrincipal, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        if (!isAutoTimeEnabled) {
+                            TextButton(onClick = { context.startActivity(Intent(Settings.ACTION_DATE_SETTINGS)) }) {
+                                Text("ACTIVAR HORA", color = AzulPrincipal, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
                 }
             }
         } else {
             Spacer(modifier = Modifier.height(16.dp))
         }
 
-        // Lógica de Vistas (Cargando, Error o Lista)
         if (isLoading) {
             Box(modifier = Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = AzulPrincipal)
@@ -257,19 +275,30 @@ fun PantallaVisitas(navController: NavController, token: String) {
             Text(text = "No tienes visitas asignadas por el momento.", modifier = Modifier.fillMaxWidth().padding(top = 32.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center, color = GrisTexto)
         } else {
             listaVisitas.forEach { visita ->
+                // ¡AQUÍ ESTÁ LA MAGIA DEL ESTADO DINÁMICO!
+                val estadoMemoria = sharedPref.getString("visita_${visita.id}", "ENTRADA")
+
+                val (textoEstado, colorEstado) = when (estadoMemoria) {
+                    "COMPLETADO" -> Pair("FINALIZADA", Color(0xFF4CAF50)) // Verde
+                    "SALIDA" -> Pair("EN CURSO", Color(0xFFF57C00)) // Naranja
+                    else -> Pair("PENDIENTE", AzulPrincipal) // Azul por defecto
+                }
+
                 VisitaCardPremium(
                     nombrePlan = visita.nombre_visitas,
                     asunto = visita.asunto,
                     lugar = visita.lugar_visita,
                     fecha = "Del ${visita.fecha_inicio} al ${visita.fecha_fin}",
-                    estado = "ASIGNADA",
+                    estado = textoEstado,
+                    colorBadge = colorEstado, // Enviamos el color a la tarjeta
                     onClick = {
-                        if (isGpsEnabled) {
+                        if (isSystemReady) {
                             val idCodificado = visita.id.toString()
                             val nombreCodificado = URLEncoder.encode(visita.nombre_visitas, StandardCharsets.UTF_8.toString())
                             navController.navigate("captura_visita/$idCodificado/$nombreCodificado")
                         } else {
-                            context.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+                            if (!isGpsEnabled) context.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+                            else context.startActivity(Intent(Settings.ACTION_DATE_SETTINGS))
                         }
                     }
                 )
@@ -280,7 +309,7 @@ fun PantallaVisitas(navController: NavController, token: String) {
 }
 
 // -------------------------------------------------------------------------
-// PANTALLA DE CONFIGURACIÓN
+// COMPONENTES RESTANTES
 // -------------------------------------------------------------------------
 @Composable
 fun PantallaConfiguracion() {
@@ -354,9 +383,6 @@ fun ItemConfiguracion(titulo: String, descripcion: String, isOk: Boolean, icon: 
     }
 }
 
-// -------------------------------------------------------------------------
-// PANTALLAS SIMPLES Y COMPONENTES
-// -------------------------------------------------------------------------
 @Composable
 fun PantallaInicio(nombreUser: String) {
     Column(modifier = Modifier.fillMaxSize().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
@@ -414,11 +440,14 @@ fun DrawerItemModern(icon: ImageVector, label: String, isSelected: Boolean, onCl
     }
 }
 
+// SE AÑADIÓ EL PARÁMETRO colorBadge PARA EL SEMÁFORO VISUAL
 @Composable
-fun VisitaCardPremium(nombrePlan: String, asunto: String, lugar: String, fecha: String, estado: String, onClick: () -> Unit) {
+fun VisitaCardPremium(nombrePlan: String, asunto: String, lugar: String, fecha: String, estado: String, colorBadge: Color, onClick: () -> Unit) {
     ElevatedCard(onClick = onClick, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp), colors = CardDefaults.elevatedCardColors(containerColor = Color.White), elevation = CardDefaults.elevatedCardElevation(defaultElevation = 6.dp)) {
         Column(modifier = Modifier.padding(24.dp)) {
-            Surface(color = AzulPrincipal.copy(alpha = 0.15f), shape = RoundedCornerShape(8.dp)) { Text(text = estado, color = AzulPrincipal, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp), letterSpacing = 1.sp) }
+            Surface(color = colorBadge.copy(alpha = 0.15f), shape = RoundedCornerShape(8.dp)) {
+                Text(text = estado, color = colorBadge, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp), letterSpacing = 1.sp)
+            }
             Spacer(modifier = Modifier.height(12.dp))
             Text(text = nombrePlan, fontWeight = FontWeight.ExtraBold, fontSize = 19.sp, color = AsideFondo, lineHeight = 24.sp)
             Spacer(modifier = Modifier.height(16.dp))

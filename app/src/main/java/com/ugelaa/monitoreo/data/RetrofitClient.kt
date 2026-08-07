@@ -22,7 +22,6 @@ interface ApiService {
     @GET("api/movil/planApi")
     suspend fun getVisitas(@Header("Authorization") token: String): Response<List<Visita>>
 
-    // ¡NUEVA RUTA DE GUARDADO MULTIPART! (Sube texto y foto al mismo tiempo)
     @Multipart
     @POST("api/movil/guardarVisitas")
     suspend fun guardarVisita(
