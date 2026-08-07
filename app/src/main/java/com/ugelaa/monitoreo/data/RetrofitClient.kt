@@ -35,7 +35,7 @@ interface ApiService {
         @Part("longitud") longitud: RequestBody,
         @Part("precision_gps") precisionGps: RequestBody,
         @Part foto: MultipartBody.Part
-    ): Response<Any> // Usamos Any temporalmente porque no sabemos qué responderá Laravel
+    ): Response<Any>
 }
 
 object RetrofitClient {

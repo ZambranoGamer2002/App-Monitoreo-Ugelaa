@@ -68,11 +68,9 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
     val nicknameUsuario by sessionManager.getNickname.collectAsState(initial = "Cargando...")
     val tokenGuardado by sessionManager.getToken.collectAsState(initial = "")
 
-    // MEMORIA PERSISTENTE
     val sharedPref = context.getSharedPreferences("EstadoVisitas", Context.MODE_PRIVATE)
     var estadoActual by remember { mutableStateOf(sharedPref.getString("visita_$idVisita", "ENTRADA") ?: "ENTRADA") }
 
-    // SEGURIDAD ANTI-TRAMPAS
     var isGpsEnabled by remember { mutableStateOf(checkGpsStatusLocal(context)) }
     var isAutoTimeEnabled by remember { mutableStateOf(checkAutoTimeEnabledLocal(context)) }
     val isSystemReady = isGpsEnabled && isAutoTimeEnabled
@@ -88,13 +86,13 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    // VARIABLES DE INTERFAZ Y FLUJO
+    //VARIABLES DE INTERFAZ Y FLUJO
     var isUploading by remember { mutableStateOf(false) }
     var serverErrorDetails by remember { mutableStateOf("") }
 
     var mostrarExitoDialog by remember { mutableStateOf(false) }
     var mensajeExitoDialog by remember { mutableStateOf("") }
-    var mostrarTransicionSalida by remember { mutableStateOf(false) } // Controla si se bloquea la Entrada
+    var mostrarTransicionSalida by remember { mutableStateOf(false) }
 
     var bitmapCaptura by remember { mutableStateOf<Bitmap?>(null) }
     var fechaCaptura by remember { mutableStateOf("") }
@@ -191,7 +189,7 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
                         }
                     }
                 } else {
-                    // ESTAMOS EN FORMULARIO
+                    //ESTAMOS EN FORMULARIO
                     val esEntradaBloqueada = (estadoActual == "ENTRADA" && mostrarTransicionSalida)
                     val descripcionTexto = if (estadoActual == "ENTRADA") "Toma una foto en la puerta o inicio del evento." else "Toma una foto al finalizar tu jornada de monitoreo."
 
@@ -228,7 +226,7 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
                             colors = ButtonDefaults.buttonColors(containerColor = AzulPrincipal)
                         ) { Text("CONTINUAR A SALIDA", color = Color.White, fontWeight = FontWeight.Bold) }
                     } else {
-                        // BOTÓN NORMAL DE GUARDADO
+                        //BOTÓN NORMAL DE GUARDADO
                         Button(
                             onClick = {
                                 coroutineScope.launch {
@@ -315,7 +313,7 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
             )
         }
 
-        //CONSOLA DE DEPURACIÓN (DEBUGGER)
+        //CONSOLA DE DEPURACIÓN
         if (serverErrorDetails.isNotEmpty()) {
             AlertDialog(
                 onDismissRequest = { serverErrorDetails = "" },
