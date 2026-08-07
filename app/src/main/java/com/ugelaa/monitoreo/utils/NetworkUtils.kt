@@ -14,8 +14,8 @@ fun observeConnectivityAsFlow(context: Context): Flow<Boolean> = callbackFlow {
     val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
 
     val callback = object : ConnectivityManager.NetworkCallback() {
-        override fun onAvailable(network: Network) { trySend(true) } // ¡Hay internet!
-        override fun onLost(network: Network) { trySend(false) } // ¡Se fue el internet!
+        override fun onAvailable(network: Network) { trySend(true) }
+        override fun onLost(network: Network) { trySend(false) }
         override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
             val hasInternet = networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
             trySend(hasInternet)

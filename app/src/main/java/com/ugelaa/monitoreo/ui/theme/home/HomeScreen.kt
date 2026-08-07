@@ -111,12 +111,19 @@ fun HomeScreen(navController: NavController, nombreUser: String, nicknameUser: S
 
                 Divider(color = Color.White.copy(alpha = 0.1f), modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
 
-                DrawerItemModern(icon = Icons.Filled.Home, label = "Inicio", isSelected = pantallaActual == "Inicio") { pantallaActual = "Inicio"; scope.launch { drawerState.close() } }
-                DrawerItemModern(icon = Icons.Filled.LocationOn, label = "Visitas (Monitoreo)", isSelected = pantallaActual == "Visitas") { pantallaActual = "Visitas"; scope.launch { drawerState.close() } }
-                DrawerItemModern(icon = Icons.Filled.Person, label = "Datos Personales", isSelected = pantallaActual == "Datos Personales") { pantallaActual = "Datos Personales"; scope.launch { drawerState.close() } }
-
-                // ¡NUEVO APARTADO EN EL MENÚ!
-                DrawerItemModern(icon = Icons.Filled.Settings, label = "Configuración", isSelected = pantallaActual == "Configuración") { pantallaActual = "Configuración"; scope.launch { drawerState.close() } }
+                // Menú con Regla de Cortesía
+                DrawerItemModern(icon = Icons.Filled.Home, label = "Inicio", isSelected = pantallaActual == "Inicio") {
+                    scope.launch { drawerState.close(); pantallaActual = "Inicio" }
+                }
+                DrawerItemModern(icon = Icons.Filled.LocationOn, label = "Visitas (Monitoreo)", isSelected = pantallaActual == "Visitas") {
+                    scope.launch { drawerState.close(); pantallaActual = "Visitas" }
+                }
+                DrawerItemModern(icon = Icons.Filled.Person, label = "Datos Personales", isSelected = pantallaActual == "Datos Personales") {
+                    scope.launch { drawerState.close(); pantallaActual = "Datos Personales" }
+                }
+                DrawerItemModern(icon = Icons.Filled.Settings, label = "Configuración", isSelected = pantallaActual == "Configuración") {
+                    scope.launch { drawerState.close(); pantallaActual = "Configuración" }
+                }
 
                 Spacer(modifier = Modifier.weight(1f))
                 Divider(color = Color.White.copy(alpha = 0.1f), modifier = Modifier.padding(horizontal = 16.dp))
@@ -136,7 +143,7 @@ fun HomeScreen(navController: NavController, nombreUser: String, nicknameUser: S
                     "Inicio" -> PantallaInicio(nombreUser)
                     "Visitas" -> PantallaVisitas(navController, tokenGuardado)
                     "Datos Personales" -> PantallaDatosPersonales(nombreUser, nicknameUser)
-                    "Configuración" -> PantallaConfiguracion() // ¡LLAMAMOS A LA NUEVA PANTALLA!
+                    "Configuración" -> PantallaConfiguracion()
                 }
             }
 
@@ -170,154 +177,22 @@ fun HomeScreen(navController: NavController, nombreUser: String, nicknameUser: S
 }
 
 // -------------------------------------------------------------------------
-// ¡NUEVA PANTALLA DE CONFIGURACIÓN!
-// -------------------------------------------------------------------------
-@Composable
-fun PantallaConfiguracion() {
-    val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
-
-    // Variables de estado
-    var hasCameraPermission by remember { mutableStateOf(checkPermission(context, Manifest.permission.CAMERA)) }
-    var hasLocationPermission by remember { mutableStateOf(checkPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)) }
-    var isGpsEnabled by remember { mutableStateOf(checkGpsStatus(context)) }
-
-    // Este efecto mágico actualiza los estados cada vez que la app vuelve a primer plano
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                hasCameraPermission = checkPermission(context, Manifest.permission.CAMERA)
-                hasLocationPermission = checkPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)
-                isGpsEnabled = checkGpsStatus(context)
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = 20.dp)
-            .verticalScroll(rememberScrollState())
-    ) {
-        Spacer(modifier = Modifier.height(24.dp))
-        Text(text = "Configuración del Dispositivo", fontWeight = FontWeight.ExtraBold, fontSize = 22.sp, color = AsideFondo)
-        Text(text = "Verifica que el sistema esté listo para el monitoreo.", color = GrisTexto, fontSize = 14.sp, modifier = Modifier.padding(top = 4.dp, bottom = 20.dp))
-
-        // TARJETA DE CÁMARA
-        ItemConfiguracion(
-            titulo = "Permiso de Cámara",
-            descripcion = "Necesario para registrar las evidencias fotográficas de entrada y salida.",
-            isOk = hasCameraPermission,
-            icon = Icons.Filled.CameraAlt,
-            onClickArreglar = {
-                val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply { data = Uri.fromParts("package", context.packageName, null) }
-                context.startActivity(intent)
-            }
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // TARJETA DE PERMISO DE UBICACIÓN
-        ItemConfiguracion(
-            titulo = "Permiso de Ubicación",
-            descripcion = "Necesario para obtener las coordenadas exactas de la visita.",
-            isOk = hasLocationPermission,
-            icon = Icons.Filled.LocationOn,
-            onClickArreglar = {
-                val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply { data = Uri.fromParts("package", context.packageName, null) }
-                context.startActivity(intent)
-            }
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // TARJETA DE GPS ENCENDIDO
-        ItemConfiguracion(
-            titulo = "Sensor GPS",
-            descripcion = "Verifica si la ubicación física del teléfono está encendida.",
-            isOk = isGpsEnabled,
-            icon = Icons.Filled.GpsFixed,
-            onClickArreglar = {
-                context.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
-            }
-        )
-    }
-}
-
-// Funciones de apoyo para revisar permisos
-fun checkPermission(context: Context, permission: String): Boolean {
-    return ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
-}
-
-fun checkGpsStatus(context: Context): Boolean {
-    val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
-    return locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)
-}
-
-@Composable
-fun ItemConfiguracion(titulo: String, descripcion: String, isOk: Boolean, icon: ImageVector, onClickArreglar: () -> Unit) {
-    ElevatedCard(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.elevatedCardColors(containerColor = Color.White),
-        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 4.dp)
-    ) {
-        Row(
-            modifier = Modifier.padding(16.dp).fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(48.dp)
-                    .background(if (isOk) Color(0xFFE8F5E9) else Color(0xFFFFEBEE), CircleShape),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(imageVector = icon, contentDescription = null, tint = if (isOk) Color(0xFF4CAF50) else Color(0xFFD32F2F), modifier = Modifier.size(24.dp))
-            }
-            Spacer(modifier = Modifier.width(16.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(text = titulo, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = AsideFondo)
-                Text(text = descripcion, color = GrisTexto, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.padding(vertical = 4.dp))
-
-                if (isOk) {
-                    Text(text = "✓ Activo y permitido", color = Color(0xFF2E7D32), fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                } else {
-                    Text(text = "✕ Requiere atención", color = Color(0xFFC62828), fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                }
-            }
-        }
-
-        // Botón de acción si algo está mal
-        if (!isOk) {
-            Divider(color = GrisFondoApp)
-            TextButton(
-                onClick = onClickArreglar,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp)
-            ) {
-                Text("SOLUCIONAR (ABRIR AJUSTES)", color = AzulPrincipal, fontWeight = FontWeight.Bold)
-            }
-        }
-    }
-}
+// PANTALLA DE VISITAS (Restaurada y Segura)
 // -------------------------------------------------------------------------
 @Composable
 fun PantallaVisitas(navController: NavController, token: String) {
     val context = LocalContext.current
-    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    val lifecycleOwner = LocalLifecycleOwner.current
 
     var listaVisitas by remember { mutableStateOf<List<Visita>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf("") }
-    var mostrarAlertaGps by remember { mutableStateOf(false) }
 
-    // Detector de GPS en tiempo real
     var isGpsEnabled by remember { mutableStateOf(checkGpsStatus(context)) }
 
     DisposableEffect(lifecycleOwner) {
-        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
-            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
                 isGpsEnabled = checkGpsStatus(context)
             }
         }
@@ -325,6 +200,7 @@ fun PantallaVisitas(navController: NavController, token: String) {
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
+    // EL MOTOR DE BÚSQUEDA RESTAURADO
     LaunchedEffect(token) {
         if (token.isNotEmpty()) {
             try {
@@ -333,10 +209,10 @@ fun PantallaVisitas(navController: NavController, token: String) {
                 if (response.isSuccessful && response.body() != null) {
                     listaVisitas = response.body()!!
                 } else {
-                    errorMessage = "No se pudieron cargar las visitas."
+                    errorMessage = "Error de servidor. Código: ${response.code()}"
                 }
             } catch (e: Exception) {
-                errorMessage = "Error de conexión: ${e.message}"
+                errorMessage = "Error de conexión: Verifica tu internet o el backend."
             } finally {
                 isLoading = false
             }
@@ -347,7 +223,7 @@ fun PantallaVisitas(navController: NavController, token: String) {
         Spacer(modifier = Modifier.height(24.dp))
         Text(text = "Tus Visitas Programadas", fontWeight = FontWeight.ExtraBold, fontSize = 22.sp, color = AsideFondo)
 
-        // ¡CAMBIO AQUÍ! Solo mostramos el bloque si el GPS está APAGADO
+        // Alerta GPS
         if (!isGpsEnabled) {
             Surface(
                 color = Color(0xFFFFEBEE),
@@ -365,16 +241,20 @@ fun PantallaVisitas(navController: NavController, token: String) {
                 }
             }
         } else {
-            // Si está activo, solo dejamos un pequeño espacio limpio
             Spacer(modifier = Modifier.height(16.dp))
         }
 
+        // Lógica de Vistas (Cargando, Error o Lista)
         if (isLoading) {
-            Box(modifier = Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = AzulPrincipal) }
+            Box(modifier = Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = AzulPrincipal)
+            }
         } else if (errorMessage.isNotEmpty()) {
-            Text(text = errorMessage, color = Color.Red, modifier = Modifier.fillMaxWidth())
+            Surface(color = Color(0xFFFFEBEE), shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth()) {
+                Text(text = errorMessage, color = Color(0xFFD32F2F), modifier = Modifier.padding(16.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+            }
         } else if (listaVisitas.isEmpty()) {
-            Text(text = "No tienes visitas asignadas.", modifier = Modifier.fillMaxWidth())
+            Text(text = "No tienes visitas asignadas por el momento.", modifier = Modifier.fillMaxWidth().padding(top = 32.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center, color = GrisTexto)
         } else {
             listaVisitas.forEach { visita ->
                 VisitaCardPremium(
@@ -389,7 +269,7 @@ fun PantallaVisitas(navController: NavController, token: String) {
                             val nombreCodificado = URLEncoder.encode(visita.nombre_visitas, StandardCharsets.UTF_8.toString())
                             navController.navigate("captura_visita/$idCodificado/$nombreCodificado")
                         } else {
-                            mostrarAlertaGps = true
+                            context.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
                         }
                     }
                 )
@@ -397,22 +277,86 @@ fun PantallaVisitas(navController: NavController, token: String) {
             }
         }
     }
+}
 
-    if (mostrarAlertaGps) {
-        AlertDialog(
-            onDismissRequest = { mostrarAlertaGps = false },
-            title = { Text("GPS Apagado", fontWeight = FontWeight.Bold, color = Color(0xFFD32F2F)) },
-            text = { Text("Por políticas del sistema, no puedes ingresar al panel de evidencias sin encender tu GPS.") },
-            confirmButton = {
-                TextButton(onClick = {
-                    mostrarAlertaGps = false
-                    context.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
-                }) { Text("ENCENDER AHORA") }
+// -------------------------------------------------------------------------
+// PANTALLA DE CONFIGURACIÓN
+// -------------------------------------------------------------------------
+@Composable
+fun PantallaConfiguracion() {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    var hasCameraPermission by remember { mutableStateOf(checkPermission(context, Manifest.permission.CAMERA)) }
+    var hasLocationPermission by remember { mutableStateOf(checkPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)) }
+    var isGpsEnabled by remember { mutableStateOf(checkGpsStatus(context)) }
+    var isAutoTimeEnabled by remember { mutableStateOf(checkAutoTimeEnabled(context)) }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                hasCameraPermission = checkPermission(context, Manifest.permission.CAMERA)
+                hasLocationPermission = checkPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)
+                isGpsEnabled = checkGpsStatus(context)
+                isAutoTimeEnabled = checkAutoTimeEnabled(context)
             }
-        )
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    Column(modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp).verticalScroll(rememberScrollState())) {
+        Spacer(modifier = Modifier.height(24.dp))
+        Text(text = "Configuración del Dispositivo", fontWeight = FontWeight.ExtraBold, fontSize = 22.sp, color = AsideFondo)
+        Text(text = "Verifica que el sistema esté listo para el monitoreo.", color = GrisTexto, fontSize = 14.sp, modifier = Modifier.padding(top = 4.dp, bottom = 20.dp))
+
+        ItemConfiguracion("Permiso de Cámara", "Necesario para registrar las evidencias.", hasCameraPermission, Icons.Filled.CameraAlt) {
+            context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply { data = Uri.fromParts("package", context.packageName, null) })
+        }
+        Spacer(modifier = Modifier.height(16.dp))
+        ItemConfiguracion("Permiso de Ubicación", "Necesario para obtener coordenadas exactas.", hasLocationPermission, Icons.Filled.LocationOn) {
+            context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply { data = Uri.fromParts("package", context.packageName, null) })
+        }
+        Spacer(modifier = Modifier.height(16.dp))
+        ItemConfiguracion("Sensor GPS", "Verifica si la ubicación física está encendida.", isGpsEnabled, Icons.Filled.GpsFixed) {
+            context.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+        }
+        Spacer(modifier = Modifier.height(16.dp))
+        ItemConfiguracion("Hora Automática (Red)", "Garantiza que la hora de la evidencia sea 100% real.", isAutoTimeEnabled, Icons.Filled.Schedule) {
+            context.startActivity(Intent(Settings.ACTION_DATE_SETTINGS))
+        }
+        Spacer(modifier = Modifier.height(32.dp))
     }
 }
 
+fun checkPermission(context: Context, permission: String) = ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+fun checkGpsStatus(context: Context) = (context.getSystemService(Context.LOCATION_SERVICE) as LocationManager).isProviderEnabled(LocationManager.GPS_PROVIDER)
+fun checkAutoTimeEnabled(context: Context) = try { Settings.Global.getInt(context.contentResolver, Settings.Global.AUTO_TIME) == 1 } catch (e: Exception) { false }
+
+@Composable
+fun ItemConfiguracion(titulo: String, descripcion: String, isOk: Boolean, icon: ImageVector, onClickArreglar: () -> Unit) {
+    ElevatedCard(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), colors = CardDefaults.elevatedCardColors(containerColor = Color.White), elevation = CardDefaults.elevatedCardElevation(defaultElevation = 4.dp)) {
+        Row(modifier = Modifier.padding(16.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Box(modifier = Modifier.size(48.dp).background(if (isOk) Color(0xFFE8F5E9) else Color(0xFFFFEBEE), CircleShape), contentAlignment = Alignment.Center) {
+                Icon(imageVector = icon, contentDescription = null, tint = if (isOk) Color(0xFF4CAF50) else Color(0xFFD32F2F), modifier = Modifier.size(24.dp))
+            }
+            Spacer(modifier = Modifier.width(16.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(text = titulo, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = AsideFondo)
+                Text(text = descripcion, color = GrisTexto, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.padding(vertical = 4.dp))
+                Text(text = if (isOk) "✓ Activo y permitido" else "✕ Requiere atención", color = if (isOk) Color(0xFF2E7D32) else Color(0xFFC62828), fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            }
+        }
+        if (!isOk) {
+            Divider(color = GrisFondoApp)
+            TextButton(onClick = onClickArreglar, modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp)) { Text("SOLUCIONAR (ABRIR AJUSTES)", color = AzulPrincipal, fontWeight = FontWeight.Bold) }
+        }
+    }
+}
+
+// -------------------------------------------------------------------------
+// PANTALLAS SIMPLES Y COMPONENTES
+// -------------------------------------------------------------------------
 @Composable
 fun PantallaInicio(nombreUser: String) {
     Column(modifier = Modifier.fillMaxSize().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
@@ -432,23 +376,11 @@ fun PantallaDatosPersonales(nombreUser: String, nicknameUser: String) {
         Spacer(modifier = Modifier.height(16.dp))
         ElevatedCard(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp), colors = CardDefaults.elevatedCardColors(containerColor = Color.White), elevation = CardDefaults.elevatedCardElevation(defaultElevation = 6.dp)) {
             Column(modifier = Modifier.padding(24.dp)) {
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    CampoLectura(label = "Usuario", valor = nicknameUser, modifier = Modifier.weight(1f))
-                    CampoLectura(label = "Celular", valor = "989397693", modifier = Modifier.weight(1f))
-                }
+                CampoLectura(label = "DNI / Usuario", valor = nicknameUser, modifier = Modifier.fillMaxWidth())
                 Spacer(modifier = Modifier.height(16.dp))
                 CampoLectura(label = "Nombres y Apellidos", valor = nombreUser, modifier = Modifier.fillMaxWidth())
-                Spacer(modifier = Modifier.height(16.dp))
-                CampoLectura(label = "Correo Electrónico", valor = "a.pedropaulozp@gmail.com", modifier = Modifier.fillMaxWidth())
-                Spacer(modifier = Modifier.height(16.dp))
-                CampoLectura(label = "Fecha de Nacimiento", valor = "10/03/2002", modifier = Modifier.fillMaxWidth())
-                Spacer(modifier = Modifier.height(16.dp))
-                CampoLectura(label = "Dirección", valor = "Calle Milagro - Las Américas - Picaflor 2", modifier = Modifier.fillMaxWidth())
-                Spacer(modifier = Modifier.height(16.dp))
-                CampoLectura(label = "Ubicación", valor = "Loreto - Alto Amazonas - Yurimaguas", modifier = Modifier.fillMaxWidth())
             }
         }
-        Spacer(modifier = Modifier.height(32.dp))
     }
 }
 
@@ -504,7 +436,7 @@ fun VisitaCardPremium(nombrePlan: String, asunto: String, lugar: String, fecha: 
 @Composable
 fun DetailRowPremium(icon: ImageVector, text: String) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(modifier = Modifier.size(36.dp).background(AzulPrincipal.copy(alpha = 0.1f), CircleShape), contentAlignment = Alignment.Center) { Icon(imageVector = icon, contentDescription = null, tint = AzulPrincipal, modifier = Modifier.size(18.dp)) }
+        Box(modifier = Modifier.size(36.dp).background(AzulPrincipal.copy(alpha = 0.1f), CircleShape), contentAlignment = Alignment.Center) { Icon(imageVector = icon, null, tint = AzulPrincipal, modifier = Modifier.size(18.dp)) }
         Spacer(modifier = Modifier.width(12.dp))
         Text(text = text, fontSize = 14.sp, color = Color.DarkGray, fontWeight = FontWeight.Medium, lineHeight = 20.sp)
     }
