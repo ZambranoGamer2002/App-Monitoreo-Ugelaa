@@ -435,7 +435,7 @@ fun PantallaInicio(nombreUser: String) {
         Spacer(modifier = Modifier.height(24.dp))
         Text(text = "¡Bienvenido, $nombreUser!", fontWeight = FontWeight.ExtraBold, fontSize = 28.sp, color = AsideFondo, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
         Spacer(modifier = Modifier.height(12.dp))
-        Text(text = "Desde aquí podrás gestionar tus visitas de monitoreo, actualizar tus datos y reportar evidencias en tiempo real o en modo offline.", color = GrisTexto, fontSize = 16.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center, lineHeight = 24.sp)
+        Text(text = "Desde aquí podrás gestionar tus visitas de monitoreo y reportar evidencias en tiempo real o en modo offline.", color = GrisTexto, fontSize = 16.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center, lineHeight = 24.sp)
     }
 }
 

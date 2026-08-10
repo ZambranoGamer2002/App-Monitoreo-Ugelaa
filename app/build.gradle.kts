@@ -61,7 +61,10 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
 
-    // NAVEGACIÓN Y COMPONENTES
+    //GPS
+    implementation("com.google.android.gms:play-services-location:21.2.0")
+
+    //NAVEGACIÓN Y COMPONENTES
     implementation("androidx.navigation:navigation-compose:2.7.7")
     implementation("androidx.compose.material:material-icons-extended")
 
@@ -70,7 +73,7 @@ dependencies {
     implementation("com.squareup.retrofit2:converter-gson:2.9.0")
     implementation("com.squareup.okhttp3:okhttp:4.11.0")
 
-    // PREFERENCIAS LOCALES
+    //PREFERENCIAS LOCALES
     implementation("androidx.datastore:datastore-preferences:1.0.0")
 
     // ==========================================
@@ -87,7 +90,7 @@ dependencies {
     val work_version = "2.9.0"
     implementation("androidx.work:work-runtime-ktx:$work_version")
 
-    // TESTING
+    //TESTING
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)

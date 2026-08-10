@@ -1,7 +1,9 @@
 package com.ugelaa.monitoreo.ui.theme.home
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.location.LocationManager
 import android.provider.Settings
@@ -31,10 +33,14 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.app.ActivityCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.navigation.NavController
+import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.Priority
+import com.google.android.gms.tasks.CancellationTokenSource
 import com.ugelaa.monitoreo.data.RetrofitClient
 import com.ugelaa.monitoreo.data.local.AppDatabase
 import com.ugelaa.monitoreo.data.local.VisitaEvidenciaEntity
@@ -67,6 +73,9 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
     // --- INSTANCIAS DE BÓVEDA Y CONECTIVIDAD ---
     val isOnline by observeConnectivityAsFlow(context).collectAsState(initial = true)
     val visitaDao = remember { AppDatabase.getDatabase(context).visitaDao() }
+
+    // --- RADAR GPS DE GOOGLE ---
+    val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
 
     val nombrePlanLimpio = remember(nombrePlan) {
         try { URLDecoder.decode(nombrePlan, "UTF-8") } catch (e: Exception) { nombrePlan.replace("+", " ") }
@@ -110,6 +119,11 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
     var mesCaptura by remember { mutableStateOf("") }
     var numeroMesCaptura by remember { mutableStateOf("") }
 
+    // VARIABLES GPS REAL
+    var latitudCaptura by remember { mutableStateOf("") }
+    var longitudCaptura by remember { mutableStateOf("") }
+    var precisionCaptura by remember { mutableStateOf("") }
+
     val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicturePreview()) { bitmap ->
         if (bitmap != null) {
             bitmapCaptura = bitmap
@@ -119,9 +133,25 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
             fechaCaptura = SimpleDateFormat("yyyy-MM-dd", localeEs).format(now)
             horaCaptura = SimpleDateFormat("HH:mm:ss", localeEs).format(now)
 
-            anioCaptura = SimpleDateFormat("yyyy", localeEs).format(now)                           // Ej: "2026"
-            mesCaptura = SimpleDateFormat("MMMM", localeEs).format(now).uppercase(localeEs)         // Ej: "AGOSTO"
-            numeroMesCaptura = SimpleDateFormat("M", localeEs).format(now)                          // Ej: "8" (1 a 12 sin ceros)
+            anioCaptura = SimpleDateFormat("yyyy", localeEs).format(now)
+            mesCaptura = SimpleDateFormat("MMMM", localeEs).format(now).uppercase(localeEs)
+            numeroMesCaptura = SimpleDateFormat("M", localeEs).format(now)
+
+            // 🎯 OBTENER GPS REAL CON MÁXIMA PRECISIÓN
+            if (ActivityCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+                fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, CancellationTokenSource().token)
+                    .addOnSuccessListener { location ->
+                        if (location != null) {
+                            latitudCaptura = location.latitude.toString()
+                            longitudCaptura = location.longitude.toString()
+                            precisionCaptura = location.accuracy.toString()
+                        } else {
+                            latitudCaptura = "0.0"
+                            longitudCaptura = "0.0"
+                            precisionCaptura = "0.0"
+                        }
+                    }
+            }
         }
     }
 
@@ -244,12 +274,12 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
                                     isUploading = true
                                     serverErrorDetails = ""
                                     try {
-                                        // 1. Guardamos la foto con un nombre ÚNICO para que no se sobreescriba en Offline
+                                        // 1. Guardamos la foto con un nombre ÚNICO
                                         val nombreArchivo = "visita_${idVisita}_${estadoActual.lowercase()}.jpg"
                                         val fileFoto = bitmapToFile(context, bitmapCaptura!!, nombreArchivo)
 
                                         if (isOnline) {
-                                            //MODO ONLINE DIRECTO A LARAVEL
+                                            // 🌐 MODO ONLINE DIRECTO A LARAVEL
                                             val response = RetrofitClient.apiService.guardarVisita(
                                                 token = "Bearer $tokenGuardado",
                                                 planId = idVisita.toRequestBody("text/plain".toMediaTypeOrNull()),
@@ -260,9 +290,9 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
                                                 anio = anioCaptura.toRequestBody("text/plain".toMediaTypeOrNull()),
                                                 mes = mesCaptura.toRequestBody("text/plain".toMediaTypeOrNull()),
                                                 numeroMes = numeroMesCaptura.toRequestBody("text/plain".toMediaTypeOrNull()),
-                                                latitud = "-5.90123".toRequestBody("text/plain".toMediaTypeOrNull()),
-                                                longitud = "-76.11000".toRequestBody("text/plain".toMediaTypeOrNull()),
-                                                precisionGps = "15.0".toRequestBody("text/plain".toMediaTypeOrNull()),
+                                                latitud = latitudCaptura.toRequestBody("text/plain".toMediaTypeOrNull()),
+                                                longitud = longitudCaptura.toRequestBody("text/plain".toMediaTypeOrNull()),
+                                                precisionGps = precisionCaptura.toRequestBody("text/plain".toMediaTypeOrNull()),
                                                 foto = MultipartBody.Part.createFormData("foto", fileFoto.name, fileFoto.asRequestBody("image/jpeg".toMediaTypeOrNull()))
                                             )
 
@@ -284,9 +314,9 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
                                                 anio = anioCaptura,
                                                 mes = mesCaptura,
                                                 numeroMes = numeroMesCaptura,
-                                                latitud = "-5.90123",
-                                                longitud = "-76.11000",
-                                                precisionGps = "15.0",
+                                                latitud = latitudCaptura,
+                                                longitud = longitudCaptura,
+                                                precisionGps = precisionCaptura,
                                                 rutaFotoLocal = fileFoto.absolutePath
                                             )
                                             visitaDao.insertarEvidencia(nuevaEvidenciaOffline)
@@ -313,7 +343,7 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
                             },
                             modifier = Modifier.fillMaxWidth().height(56.dp),
                             enabled = bitmapCaptura != null && isSystemReady,
-                            colors = ButtonDefaults.buttonColors(containerColor = if (isOnline) AzulPrincipal else Color(0xFFE65100)) // Botón naranja si está offline
+                            colors = ButtonDefaults.buttonColors(containerColor = if (isOnline) AzulPrincipal else Color(0xFFE65100))
                         ) {
                             Text(if (isOnline) "GUARDAR $estadoActual AHORA" else "GUARDAR $estadoActual (OFFLINE)", color = Color.White, fontWeight = FontWeight.Bold)
                         }
@@ -323,7 +353,7 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
         }
 
         // ==========================================
-        // DIÁLOGO DE ÉXITO
+        // DIÁLOGO DE ÉXITO Y ERROR
         // ==========================================
         if (mostrarExitoDialog) {
             AlertDialog(
@@ -350,7 +380,7 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
             )
         }
 
-        // CONSOLA DE DEPURACIÓN (DEBUGGER)
+        // CONSOLA DE DEPURACIÓN EN CASO DE ERROR DE SERVIDOR
         if (serverErrorDetails.isNotEmpty()) {
             AlertDialog(
                 onDismissRequest = { serverErrorDetails = "" },
