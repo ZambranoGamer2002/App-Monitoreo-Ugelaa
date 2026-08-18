@@ -1,8 +1,10 @@
 package com.ugelaa.monitoreo.data
 
+import com.ugelaa.monitoreo.model.Actualizacion
 import com.ugelaa.monitoreo.model.LoginRequest
 import com.ugelaa.monitoreo.model.LoginResponse
 import com.ugelaa.monitoreo.model.Visita
+import com.ugelaa.monitoreo.model.LugarVisita
 import okhttp3.MultipartBody
 import okhttp3.RequestBody
 import retrofit2.Response
@@ -14,14 +16,26 @@ import retrofit2.http.Header
 import retrofit2.http.Multipart
 import retrofit2.http.POST
 import retrofit2.http.Part
+import retrofit2.http.Query
+import retrofit2.http.Path
 
 interface ApiService {
+
     @POST("api/movil/login")
     suspend fun login(@Body request: LoginRequest): Response<LoginResponse>
 
     @GET("api/movil/planApi")
-    suspend fun getVisitas(@Header("Authorization") token: String): Response<List<Visita>>
+    suspend fun getVisitas(
+        @Header("Authorization") token: String
+    ): Response<List<Visita>>
 
+    @GET("api/movil/planVisitas/{plan_id}")
+    suspend fun getDetalleVisita(
+        @Path("plan_id") planId: String,
+        @Header("Authorization") token: String
+    ): Response<List<LugarVisita>>
+
+    // 3. GUARDAR EVIDENCIA
     @Multipart
     @POST("api/movil/guardarVisitas")
     suspend fun guardarVisita(
@@ -37,8 +51,13 @@ interface ApiService {
         @Part("latitud") latitud: RequestBody,
         @Part("longitud") longitud: RequestBody,
         @Part("precision_gps") precisionGps: RequestBody,
+        @Part("observacion") observacion: RequestBody,
         @Part foto: MultipartBody.Part
     ): Response<Any>
+
+    @GET("api/movil/actualizaciones")
+    suspend fun verificarActualizacion(): Response<List<Actualizacion>>
+
 }
 
 object RetrofitClient {

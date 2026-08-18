@@ -49,6 +49,7 @@ class SyncWorker(
                     latitud = evidencia.latitud.toRequestBody("text/plain".toMediaTypeOrNull()),
                     longitud = evidencia.longitud.toRequestBody("text/plain".toMediaTypeOrNull()),
                     precisionGps = evidencia.precisionGps.toRequestBody("text/plain".toMediaTypeOrNull()),
+                    observacion = evidencia.observacion.toRequestBody("text/plain".toMediaTypeOrNull()), // 🔥 AHORA EL WORKER TAMBIÉN MANDA LA OBSERVACIÓN
                     foto = MultipartBody.Part.createFormData(
                         "foto",
                         fileFoto.name,

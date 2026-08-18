@@ -5,7 +5,7 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 
-@Database(entities = [VisitaEvidenciaEntity::class], version = 3, exportSchema = false)
+@Database(entities = [VisitaEvidenciaEntity::class], version = 2, exportSchema = false) // Puedes subir la versión a 2
 abstract class AppDatabase : RoomDatabase() {
 
     abstract fun visitaDao(): VisitaDao
@@ -19,11 +19,11 @@ abstract class AppDatabase : RoomDatabase() {
                 val instance = Room.databaseBuilder(
                     context.applicationContext,
                     AppDatabase::class.java,
-                    "monitoreo_offline_db"
+                    "monitoreo_database"
                 )
+
                     .fallbackToDestructiveMigration()
                     .build()
-
                 INSTANCE = instance
                 instance
             }

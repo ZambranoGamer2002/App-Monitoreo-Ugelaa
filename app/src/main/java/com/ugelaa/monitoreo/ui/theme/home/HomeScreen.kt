@@ -18,8 +18,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.rounded.DateRange
-import androidx.compose.material.icons.rounded.Info
-import androidx.compose.material.icons.rounded.LocationOn
+import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -30,6 +30,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -42,6 +43,8 @@ import androidx.work.Constraints
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 import com.ugelaa.monitoreo.R
 import com.ugelaa.monitoreo.data.RetrofitClient
 import com.ugelaa.monitoreo.data.local.AppDatabase
@@ -56,8 +59,9 @@ import com.ugelaa.monitoreo.utils.observeConnectivityAsFlow
 import kotlinx.coroutines.launch
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
-import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -74,7 +78,6 @@ fun HomeScreen(navController: NavController, nombreUser: String, nicknameUser: S
 
     val tokenGuardado by sessionManager.getToken.collectAsState(initial = "")
 
-    //Programar la sincronización automática si hay señal
     LaunchedEffect(isOnline) {
         if (isOnline) {
             iniciarSincronizacion(context)
@@ -129,8 +132,11 @@ fun HomeScreen(navController: NavController, nombreUser: String, nicknameUser: S
                 DrawerItemModern(icon = Icons.Filled.Home, label = "Inicio", isSelected = pantallaActual == "Inicio") {
                     scope.launch { drawerState.close(); pantallaActual = "Inicio" }
                 }
-                DrawerItemModern(icon = Icons.Filled.LocationOn, label = "Visitas (Monitoreo)", isSelected = pantallaActual == "Visitas") {
+                DrawerItemModern(icon = Icons.Filled.LocationOn, label = "Visitas Activas", isSelected = pantallaActual == "Visitas") {
                     scope.launch { drawerState.close(); pantallaActual = "Visitas" }
+                }
+                DrawerItemModern(icon = Icons.Filled.History, label = "Historial de Visitas", isSelected = pantallaActual == "Historial") {
+                    scope.launch { drawerState.close(); pantallaActual = "Historial" }
                 }
                 DrawerItemModern(icon = Icons.Filled.Person, label = "Datos Personales", isSelected = pantallaActual == "Datos Personales") {
                     scope.launch { drawerState.close(); pantallaActual = "Datos Personales" }
@@ -151,11 +157,15 @@ fun HomeScreen(navController: NavController, nombreUser: String, nicknameUser: S
         Surface(modifier = Modifier.fillMaxSize(), color = GrisFondoApp) {
             Column(modifier = Modifier.fillMaxSize()) {
 
-                CustomHeader(nombreDocente = nombreUser, onMenuClick = { scope.launch { drawerState.open() } })
+                CustomHeader(
+                    nombreDocente = nombreUser,
+                    onMenuClick = { scope.launch { drawerState.open() } }
+                )
 
                 when (pantallaActual) {
                     "Inicio" -> PantallaInicio(nombreUser)
                     "Visitas" -> PantallaVisitas(navController, tokenGuardado)
+                    "Historial" -> PantallaHistorialVisitas(tokenGuardado)
                     "Datos Personales" -> PantallaDatosPersonales(nombreUser, nicknameUser)
                     "Configuración" -> PantallaConfiguracion()
                 }
@@ -165,13 +175,16 @@ fun HomeScreen(navController: NavController, nombreUser: String, nicknameUser: S
                 AlertDialog(
                     onDismissRequest = { mostrarDialogoCerrarSesion = false },
                     title = { Text(text = "Cerrar Sesión", fontWeight = FontWeight.Bold, color = AsideFondo) },
-                    text = { Text(text = "¿Estás seguro de que deseas salir? Si no tienes internet, no podrás volver a ingresar.", color = GrisTexto) },
+                    text = { Text(text = "¿Estás seguro de que deseas salir? Todos los datos cacheados se borrarán por seguridad.", color = GrisTexto) },
                     confirmButton = {
                         TextButton(
                             onClick = {
                                 mostrarDialogoCerrarSesion = false
                                 scope.launch {
+                                    context.getSharedPreferences("CacheVisitas", Context.MODE_PRIVATE).edit().clear().apply()
+                                    context.getSharedPreferences("EstadoVisitas", Context.MODE_PRIVATE).edit().clear().apply()
                                     sessionManager.limpiarSesion()
+
                                     navController.navigate("login_screen") {
                                         popUpTo(navController.graph.id) { inclusive = true }
                                     }
@@ -191,17 +204,16 @@ fun HomeScreen(navController: NavController, nombreUser: String, nicknameUser: S
 }
 
 // -------------------------------------------------------------------------
-// PANTALLA DE VISITAS CON CONTADOR DE REGISTROS OFFLINE
+// PANTALLA DE VISITAS ACTIVAS
 // -------------------------------------------------------------------------
 @Composable
 fun PantallaVisitas(navController: NavController, token: String) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-
     val sharedPref = context.getSharedPreferences("EstadoVisitas", Context.MODE_PRIVATE)
-    val sharedPrefCache = context.getSharedPreferences("CacheVisitas", Context.MODE_PRIVATE) // <-- Bóveda de texto
+    val sharedPrefCache = context.getSharedPreferences("CacheVisitas", Context.MODE_PRIVATE)
     val visitaDao = remember { AppDatabase.getDatabase(context).visitaDao() }
-    val gson = remember { Gson() } // <-- Traductor de listas
+    val gson = remember { Gson() }
 
     var listaVisitas by remember { mutableStateOf<List<Visita>>(emptyList()) }
     var cantidadPendientesOffline by remember { mutableStateOf(0) }
@@ -210,17 +222,25 @@ fun PantallaVisitas(navController: NavController, token: String) {
 
     var isGpsEnabled by remember { mutableStateOf(checkGpsStatus(context)) }
     var isAutoTimeEnabled by remember { mutableStateOf(checkAutoTimeEnabled(context)) }
-    val isSystemReady = isGpsEnabled && isAutoTimeEnabled
+    var isAirplaneModeOn by remember { mutableStateOf(checkAirplaneMode(context)) }
+    val isSystemReady = isGpsEnabled && isAutoTimeEnabled && !isAirplaneModeOn
 
-    // 1. CARGAR DESDE LA MEMORIA CACHÉ PRIMERO (Magia Offline)
+    val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+    val fechaHoy = sdf.format(Date())
+
     LaunchedEffect(Unit) {
         val jsonGuardado = sharedPrefCache.getString("planes_offline", null)
-        if (jsonGuardado != null) {
-            val type = object : TypeToken<List<Visita>>() {}.type
-            listaVisitas = gson.fromJson(jsonGuardado, type)
+        if (!jsonGuardado.isNullOrEmpty() && jsonGuardado != "null") {
+            try {
+                val type = object : TypeToken<List<Visita>>() {}.type
+                val datosCacheados: List<Visita>? = gson.fromJson(jsonGuardado, type)
+                if (datosCacheados != null) {
+                    listaVisitas = datosCacheados
+                }
+            } catch (e: Exception) {
+                sharedPrefCache.edit().remove("planes_offline").apply()
+            }
         }
-
-        // Cargar contador de fotos pendientes
         val pendientes = visitaDao.obtenerEvidenciasPendientes()
         cantidadPendientesOffline = pendientes.size
     }
@@ -230,21 +250,20 @@ fun PantallaVisitas(navController: NavController, token: String) {
             if (event == Lifecycle.Event.ON_RESUME) {
                 isGpsEnabled = checkGpsStatus(context)
                 isAutoTimeEnabled = checkAutoTimeEnabled(context)
+                isAirplaneModeOn = checkAirplaneMode(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    // 2. ACTUALIZAR CON INTERNET (Si hay señal)
     LaunchedEffect(token) {
         if (token.isNotEmpty()) {
             try {
-                isLoading = listaVisitas.isEmpty() // Solo muestra la bolita de carga si la pantalla está vacía
+                isLoading = true
                 val response = RetrofitClient.apiService.getVisitas("Bearer $token")
                 if (response.isSuccessful && response.body() != null) {
                     listaVisitas = response.body()!!
-                    // ¡ACTUALIZAMOS LA COPIA DE SEGURIDAD EN EL CELULAR!
                     sharedPrefCache.edit().putString("planes_offline", gson.toJson(listaVisitas)).apply()
                 } else {
                     errorMessage = "Error de servidor. Código: ${response.code()}"
@@ -254,83 +273,103 @@ fun PantallaVisitas(navController: NavController, token: String) {
             } finally {
                 isLoading = false
             }
+        } else {
+            isLoading = false
         }
     }
 
+    val visitasActivas = listaVisitas.filter { (it.fecha_fin ?: "") >= fechaHoy }
+
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp).verticalScroll(rememberScrollState())) {
         Spacer(modifier = Modifier.height(24.dp))
-        Text(text = "Tus Visitas Programadas", fontWeight = FontWeight.ExtraBold, fontSize = 22.sp, color = AsideFondo)
+        Text(text = "Visitas Activas", fontWeight = FontWeight.ExtraBold, fontSize = 22.sp, color = AsideFondo)
+        Text(text = "Planes programados para realizarse hoy o en los próximos días.", color = GrisTexto, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp, bottom = 16.dp))
 
-        // --- BANNER DE EVIDENCIAS PENDIENTES DE SUBIR (OFFLINE) ---
         if (cantidadPendientesOffline > 0) {
-            Surface(
-                color = Color(0xFFFFF3E0),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.padding(top = 12.dp, bottom = 8.dp).fillMaxWidth()
-            ) {
+            Surface(color = Color(0xFFFFF3E0), shape = RoundedCornerShape(12.dp), modifier = Modifier.padding(bottom = 8.dp).fillMaxWidth()) {
                 Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Filled.CloudUpload, contentDescription = null, tint = Color(0xFFE65100))
                     Spacer(modifier = Modifier.width(12.dp))
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("Tienes $cantidadPendientesOffline registro(s) guardado(s) en el celular", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color(0xFFE65100))
-                        Text("Se subirán automáticamente al servidor cuando haya internet.", fontSize = 11.sp, color = Color.DarkGray)
+                        Text("Tienes $cantidadPendientesOffline registro(s) offline.", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color(0xFFE65100))
+                        Text("Se subirán automáticamente cuando haya internet.", fontSize = 11.sp, color = Color.DarkGray)
                     }
                 }
             }
         }
 
         if (!isSystemReady) {
-            Surface(
-                color = Color(0xFFFFEBEE),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.padding(top = 12.dp, bottom = 16.dp).fillMaxWidth()
-            ) {
+            Surface(color = Color(0xFFFFEBEE), shape = RoundedCornerShape(12.dp), modifier = Modifier.padding(bottom = 16.dp).fillMaxWidth()) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Filled.Warning, contentDescription = null, tint = Color(0xFFD32F2F), modifier = Modifier.size(20.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("SISTEMA NO REQUERIDO ACTIVADO", color = Color(0xFFC62828), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        Text("ATENCIÓN DE SEGURIDAD", color = Color(0xFFC62828), fontSize = 13.sp, fontWeight = FontWeight.Bold)
                     }
                     Spacer(modifier = Modifier.height(6.dp))
-                    if (!isGpsEnabled) Text("• El GPS está APAGADO. Debes encenderlo.", color = Color(0xFFB71C1C), fontSize = 12.sp)
-                    if (!isAutoTimeEnabled) Text("• La 'Hora Automática' está DESACTIVADA.", color = Color(0xFFB71C1C), fontSize = 12.sp)
+                    if (isAirplaneModeOn) {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
+                            Icon(Icons.Filled.AirplanemodeActive, contentDescription = null, tint = Color(0xFFB71C1C), modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Modo Avión activado. Debes apagarlo.", color = Color(0xFFB71C1C), fontSize = 12.sp)
+                        }
+                    }
+                    if (!isGpsEnabled) {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
+                            Icon(Icons.Filled.LocationOff, contentDescription = null, tint = Color(0xFFB71C1C), modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("El GPS está desactivado. Debes encenderlo.", color = Color(0xFFB71C1C), fontSize = 12.sp)
+                        }
+                    }
+                    if (!isAutoTimeEnabled) {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
+                            Icon(Icons.Filled.TimerOff, contentDescription = null, tint = Color(0xFFB71C1C), modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("La 'Hora Automática' está desactivada.", color = Color(0xFFB71C1C), fontSize = 12.sp)
+                        }
+                    }
                 }
             }
-        } else {
-            Spacer(modifier = Modifier.height(16.dp))
         }
 
         if (isLoading) {
-            Box(modifier = Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) {
+            Box(modifier = Modifier.fillMaxWidth().height(150.dp), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = AzulPrincipal)
             }
-        } else if (listaVisitas.isEmpty()) {
-            Text(text = "No hay visitas para mostrar.", modifier = Modifier.fillMaxWidth().padding(top = 32.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center, color = GrisTexto)
+        } else if (visitasActivas.isEmpty()) {
+            Box(modifier = Modifier.fillMaxWidth().padding(top = 48.dp), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(Icons.Filled.EventAvailable, contentDescription = null, tint = GrisTexto.copy(alpha = 0.5f), modifier = Modifier.size(48.dp))
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(text = "No hay visitas activas en este momento.", textAlign = androidx.compose.ui.text.style.TextAlign.Center, color = GrisTexto)
+                }
+            }
         } else {
-            listaVisitas.forEach { visita ->
-                val estadoMemoria = sharedPref.getString("visita_${visita.id}", "ENTRADA")
-
+            visitasActivas.forEach { visita ->
+                val estadoMemoria = sharedPref.getString("visita_${visita.id}", "PENDIENTE")
                 val (textoEstado, colorEstado) = when (estadoMemoria) {
                     "COMPLETADO" -> Pair("FINALIZADA", Color(0xFF4CAF50))
                     "SALIDA" -> Pair("EN CURSO", Color(0xFFF57C00))
+                    "MEDIO" -> Pair("EN CURSO", Color(0xFFF57C00))
+                    "ENTRADA" -> Pair("EN CURSO", Color(0xFFF57C00))
                     else -> Pair("PENDIENTE", AzulPrincipal)
                 }
 
                 VisitaCardPremium(
-                    nombrePlan = visita.nombre_visitas,
-                    asunto = visita.asunto,
-                    lugar = visita.lugar_visita,
-                    fecha = "Del ${visita.fecha_inicio} al ${visita.fecha_fin}",
+                    nombrePlan = visita.nombre_visitas ?: "Sin Nombre",
+                    fecha = "Del ${visita.fecha_inicio ?: "-"} al ${visita.fecha_fin ?: "-"}",
                     estado = textoEstado,
                     colorBadge = colorEstado,
+                    isExpired = false,
                     onClick = {
                         if (isSystemReady) {
                             val idCodificado = visita.id.toString()
-                            val nombreCodificado = java.net.URLEncoder.encode(visita.nombre_visitas, java.nio.charset.StandardCharsets.UTF_8.toString())
+                            val nombreCodificado = URLEncoder.encode(visita.nombre_visitas ?: "Visita", StandardCharsets.UTF_8.toString())
                             navController.navigate("captura_visita/$idCodificado/$nombreCodificado")
                         } else {
-                            if (!isGpsEnabled) context.startActivity(android.content.Intent(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS))
-                            else context.startActivity(android.content.Intent(android.provider.Settings.ACTION_DATE_SETTINGS))
+                            if (isAirplaneModeOn) context.startActivity(Intent(Settings.ACTION_AIRPLANE_MODE_SETTINGS))
+                            else if (!isGpsEnabled) context.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+                            else context.startActivity(Intent(Settings.ACTION_DATE_SETTINGS))
                         }
                     }
                 )
@@ -340,22 +379,135 @@ fun PantallaVisitas(navController: NavController, token: String) {
     }
 }
 
-//FUNCIÓN PARA DISPARAR EL WORKMANAGER
-fun iniciarSincronizacion(context: Context) {
-    val constraints = Constraints.Builder()
-        .setRequiredNetworkType(NetworkType.CONNECTED) // Solo se ejecuta si hay INTERNET
-        .build()
+// -------------------------------------------------------------------------
+// PANTALLA DE HISTORIAL DE VISITAS
+// -------------------------------------------------------------------------
+@Composable
+fun PantallaHistorialVisitas(token: String) {
+    val context = LocalContext.current
+    val sharedPref = context.getSharedPreferences("EstadoVisitas", Context.MODE_PRIVATE)
+    val sharedPrefCache = context.getSharedPreferences("CacheVisitas", Context.MODE_PRIVATE)
+    val gson = remember { Gson() }
 
-    val syncRequest = OneTimeWorkRequestBuilder<SyncWorker>()
-        .setConstraints(constraints)
-        .build()
+    var listaVisitas by remember { mutableStateOf<List<Visita>>(emptyList()) }
 
-    WorkManager.getInstance(context).enqueue(syncRequest)
+    val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+    val fechaHoy = sdf.format(Date())
+
+    LaunchedEffect(Unit) {
+        val jsonGuardado = sharedPrefCache.getString("planes_offline", null)
+        if (!jsonGuardado.isNullOrEmpty() && jsonGuardado != "null") {
+            try {
+                val type = object : TypeToken<List<Visita>>() {}.type
+                val datosCacheados: List<Visita>? = gson.fromJson(jsonGuardado, type)
+                if (datosCacheados != null) {
+                    listaVisitas = datosCacheados
+                }
+            } catch (e: Exception) {
+                sharedPrefCache.edit().remove("planes_offline").apply()
+            }
+        }
+    }
+
+    val visitasPasadas = listaVisitas.filter {
+        (it.fecha_fin ?: "") < fechaHoy && (it.fecha_fin ?: "").isNotEmpty()
+    }
+
+    Column(modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp).verticalScroll(rememberScrollState())) {
+        Spacer(modifier = Modifier.height(24.dp))
+        Text(text = "Historial de Visitas", fontWeight = FontWeight.ExtraBold, fontSize = 22.sp, color = AsideFondo)
+        Text(text = "Aquí se archivan las visitas cuya fecha límite ya terminó.", color = GrisTexto, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp, bottom = 24.dp))
+
+        if (visitasPasadas.isEmpty()) {
+            Box(modifier = Modifier.fillMaxWidth().padding(top = 48.dp), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(Icons.Filled.History, contentDescription = null, tint = GrisTexto.copy(alpha = 0.5f), modifier = Modifier.size(48.dp))
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(text = "Aún no tienes visitas en el historial.", textAlign = androidx.compose.ui.text.style.TextAlign.Center, color = GrisTexto)
+                }
+            }
+        } else {
+            visitasPasadas.forEach { visita ->
+                val estadoMemoria = sharedPref.getString("visita_${visita.id}", "PENDIENTE")
+                val (textoEstado, colorEstado, isExpired) = when (estadoMemoria) {
+                    "COMPLETADO" -> Triple("CULMINADA A TIEMPO", Color(0xFF2E7D32), false)
+                    else -> Triple("NO CULMINADA / VENCIDA", Color(0xFFD32F2F), true)
+                }
+
+                VisitaCardPremium(
+                    nombrePlan = visita.nombre_visitas ?: "Sin Nombre",
+                    fecha = "Del ${visita.fecha_inicio ?: "-"} al ${visita.fecha_fin ?: "-"}",
+                    estado = textoEstado,
+                    colorBadge = colorEstado,
+                    isExpired = isExpired,
+                    onClick = { /* Bloqueado en historial */ }
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+            }
+        }
+    }
 }
 
 // -------------------------------------------------------------------------
-// OTROS COMPONENTES
+// COMPONENTE TARJETA DE VISITA PREMIUM
 // -------------------------------------------------------------------------
+@Composable
+fun VisitaCardPremium(nombrePlan: String, fecha: String, estado: String, colorBadge: Color, isExpired: Boolean, onClick: () -> Unit) {
+    ElevatedCard(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.elevatedCardColors(containerColor = if (isExpired) Color(0xFFFAFAFA) else Color.White),
+        elevation = CardDefaults.elevatedCardElevation(defaultElevation = if (isExpired) 1.dp else 6.dp)
+    ) {
+        Column(modifier = Modifier.padding(24.dp)) {
+            Surface(color = colorBadge.copy(alpha = 0.15f), shape = RoundedCornerShape(8.dp)) {
+                Text(text = estado, color = colorBadge, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp), letterSpacing = 1.sp)
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(text = nombrePlan, fontWeight = FontWeight.ExtraBold, fontSize = 19.sp, color = if (isExpired) GrisTexto else AsideFondo, lineHeight = 24.sp)
+            Spacer(modifier = Modifier.height(16.dp))
+            Divider(color = GrisFondoApp, thickness = 1.5.dp)
+            Spacer(modifier = Modifier.height(16.dp))
+            DetailRowPremium(icon = Icons.Rounded.DateRange, text = fecha, isExpired = isExpired)
+        }
+    }
+}
+
+@Composable
+fun DetailRowPremium(icon: ImageVector, text: String, isExpired: Boolean) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(modifier = Modifier.size(36.dp).background(if (isExpired) GrisTexto.copy(alpha=0.1f) else AzulPrincipal.copy(alpha = 0.1f), CircleShape), contentAlignment = Alignment.Center) {
+            Icon(imageVector = icon, null, tint = if (isExpired) GrisTexto else AzulPrincipal, modifier = Modifier.size(18.dp))
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        Text(text = text, fontSize = 14.sp, color = if (isExpired) GrisTexto else Color.DarkGray, fontWeight = FontWeight.Medium, lineHeight = 20.sp)
+    }
+}
+
+// -------------------------------------------------------------------------
+// COMPONENTES AUXILIARES
+// -------------------------------------------------------------------------
+fun iniciarSincronizacion(context: Context) {
+    val constraints = Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
+    val syncRequest = OneTimeWorkRequestBuilder<SyncWorker>().setConstraints(constraints).build()
+    WorkManager.getInstance(context).enqueue(syncRequest)
+}
+
+@Composable
+fun CustomHeader(nombreDocente: String, onMenuClick: () -> Unit) {
+    Box(modifier = Modifier.fillMaxWidth().background(color = AzulPrincipal, shape = RoundedCornerShape(bottomStart = 32.dp, bottomEnd = 32.dp)).padding(top = 48.dp, bottom = 32.dp, start = 20.dp, end = 20.dp)) {
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onMenuClick, modifier = Modifier.background(Color.White.copy(alpha = 0.2f), CircleShape).size(44.dp)) { Icon(Icons.Filled.Menu, contentDescription = "Menú", tint = Color.White) }
+                Spacer(modifier = Modifier.width(16.dp))
+                Column { Text(text = "Hola,", color = Color.White.copy(alpha = 0.8f), fontSize = 14.sp); Text(text = nombreDocente, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold) }
+            }
+            Box(modifier = Modifier.size(50.dp).background(Color.White, CircleShape), contentAlignment = Alignment.Center) { Icon(imageVector = Icons.Filled.Person, contentDescription = "Perfil", tint = AzulPrincipal, modifier = Modifier.size(32.dp)) }
+        }
+    }
+}
+
 @Composable
 fun PantallaConfiguracion() {
     val context = LocalContext.current
@@ -365,6 +517,7 @@ fun PantallaConfiguracion() {
     var hasLocationPermission by remember { mutableStateOf(checkPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)) }
     var isGpsEnabled by remember { mutableStateOf(checkGpsStatus(context)) }
     var isAutoTimeEnabled by remember { mutableStateOf(checkAutoTimeEnabled(context)) }
+    var isAirplaneModeOn by remember { mutableStateOf(checkAirplaneMode(context)) }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -373,6 +526,7 @@ fun PantallaConfiguracion() {
                 hasLocationPermission = checkPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)
                 isGpsEnabled = checkGpsStatus(context)
                 isAutoTimeEnabled = checkAutoTimeEnabled(context)
+                isAirplaneModeOn = checkAirplaneMode(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -399,6 +553,10 @@ fun PantallaConfiguracion() {
         ItemConfiguracion("Hora Automática (Red)", "Garantiza que la hora sea 100% real.", isAutoTimeEnabled, Icons.Filled.Schedule) {
             context.startActivity(Intent(Settings.ACTION_DATE_SETTINGS))
         }
+        Spacer(modifier = Modifier.height(16.dp))
+        ItemConfiguracion("Modo Avión", "Debe estar apagado para evitar bloqueos.", !isAirplaneModeOn, Icons.Filled.AirplanemodeActive) {
+            context.startActivity(Intent(Settings.ACTION_AIRPLANE_MODE_SETTINGS))
+        }
         Spacer(modifier = Modifier.height(32.dp))
     }
 }
@@ -406,6 +564,7 @@ fun PantallaConfiguracion() {
 fun checkPermission(context: Context, permission: String) = ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
 fun checkGpsStatus(context: Context) = (context.getSystemService(Context.LOCATION_SERVICE) as LocationManager).isProviderEnabled(LocationManager.GPS_PROVIDER)
 fun checkAutoTimeEnabled(context: Context) = try { Settings.Global.getInt(context.contentResolver, Settings.Global.AUTO_TIME) == 1 } catch (e: Exception) { false }
+fun checkAirplaneMode(context: Context): Boolean = Settings.Global.getInt(context.contentResolver, Settings.Global.AIRPLANE_MODE_ON, 0) != 0
 
 @Composable
 fun ItemConfiguracion(titulo: String, descripcion: String, isOk: Boolean, icon: ImageVector, onClickArreglar: () -> Unit) {
@@ -418,7 +577,22 @@ fun ItemConfiguracion(titulo: String, descripcion: String, isOk: Boolean, icon: 
             Column(modifier = Modifier.weight(1f)) {
                 Text(text = titulo, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = AsideFondo)
                 Text(text = descripcion, color = GrisTexto, fontSize = 13.sp, lineHeight = 18.sp, modifier = Modifier.padding(vertical = 4.dp))
-                Text(text = if (isOk) "✓ Activo y permitido" else "✕ Requiere atención", color = if (isOk) Color(0xFF2E7D32) else Color(0xFFC62828), fontWeight = FontWeight.Bold, fontSize = 13.sp)
+
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
+                    Icon(
+                        imageVector = if (isOk) Icons.Filled.Check else Icons.Filled.Close,
+                        contentDescription = null,
+                        tint = if (isOk) Color(0xFF2E7D32) else Color(0xFFC62828),
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = if (isOk) "Activo y permitido" else "Requiere atención",
+                        color = if (isOk) Color(0xFF2E7D32) else Color(0xFFC62828),
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp
+                    )
+                }
             }
         }
         if (!isOk) {
@@ -461,20 +635,6 @@ fun CampoLectura(label: String, valor: String, modifier: Modifier = Modifier) {
 }
 
 @Composable
-fun CustomHeader(nombreDocente: String, onMenuClick: () -> Unit) {
-    Box(modifier = Modifier.fillMaxWidth().background(color = AzulPrincipal, shape = RoundedCornerShape(bottomStart = 32.dp, bottomEnd = 32.dp)).padding(top = 48.dp, bottom = 32.dp, start = 20.dp, end = 20.dp)) {
-        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onMenuClick, modifier = Modifier.background(Color.White.copy(alpha = 0.2f), CircleShape).size(44.dp)) { Icon(Icons.Filled.Menu, contentDescription = "Menú", tint = Color.White) }
-                Spacer(modifier = Modifier.width(16.dp))
-                Column { Text(text = "Hola,", color = Color.White.copy(alpha = 0.8f), fontSize = 14.sp); Text(text = nombreDocente, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold) }
-            }
-            Box(modifier = Modifier.size(50.dp).background(Color.White, CircleShape), contentAlignment = Alignment.Center) { Icon(imageVector = Icons.Filled.Person, contentDescription = "Perfil", tint = AzulPrincipal, modifier = Modifier.size(32.dp)) }
-        }
-    }
-}
-
-@Composable
 fun DrawerItemModern(icon: ImageVector, label: String, isSelected: Boolean, onClick: () -> Unit) {
     val bgColor = if (isSelected) AzulPrincipal else Color.Transparent
     val contentColor = if (isSelected) Color.White else Color.White.copy(alpha = 0.7f)
@@ -482,35 +642,5 @@ fun DrawerItemModern(icon: ImageVector, label: String, isSelected: Boolean, onCl
         Icon(imageVector = icon, contentDescription = label, tint = contentColor, modifier = Modifier.size(22.dp))
         Spacer(modifier = Modifier.width(16.dp))
         Text(text = label, color = contentColor, fontSize = 15.sp, fontWeight = FontWeight.Medium)
-    }
-}
-
-@Composable
-fun VisitaCardPremium(nombrePlan: String, asunto: String, lugar: String, fecha: String, estado: String, colorBadge: Color, onClick: () -> Unit) {
-    ElevatedCard(onClick = onClick, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp), colors = CardDefaults.elevatedCardColors(containerColor = Color.White), elevation = CardDefaults.elevatedCardElevation(defaultElevation = 6.dp)) {
-        Column(modifier = Modifier.padding(24.dp)) {
-            Surface(color = colorBadge.copy(alpha = 0.15f), shape = RoundedCornerShape(8.dp)) {
-                Text(text = estado, color = colorBadge, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp), letterSpacing = 1.sp)
-            }
-            Spacer(modifier = Modifier.height(12.dp))
-            Text(text = nombrePlan, fontWeight = FontWeight.ExtraBold, fontSize = 19.sp, color = AsideFondo, lineHeight = 24.sp)
-            Spacer(modifier = Modifier.height(16.dp))
-            Divider(color = GrisFondoApp, thickness = 1.5.dp)
-            Spacer(modifier = Modifier.height(16.dp))
-            DetailRowPremium(icon = Icons.Rounded.Info, text = asunto)
-            Spacer(modifier = Modifier.height(12.dp))
-            DetailRowPremium(icon = Icons.Rounded.LocationOn, text = lugar)
-            Spacer(modifier = Modifier.height(12.dp))
-            DetailRowPremium(icon = Icons.Rounded.DateRange, text = fecha)
-        }
-    }
-}
-
-@Composable
-fun DetailRowPremium(icon: ImageVector, text: String) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(modifier = Modifier.size(36.dp).background(AzulPrincipal.copy(alpha = 0.1f), CircleShape), contentAlignment = Alignment.Center) { Icon(imageVector = icon, null, tint = AzulPrincipal, modifier = Modifier.size(18.dp)) }
-        Spacer(modifier = Modifier.width(12.dp))
-        Text(text = text, fontSize = 14.sp, color = Color.DarkGray, fontWeight = FontWeight.Medium, lineHeight = 20.sp)
     }
 }
