@@ -11,5 +11,7 @@ data class Visita(
     val fecha_documento: String?,
     val fecha_inicio: String?,
     val fecha_fin: String?,
-    val observacion: String?
+    val observacion: String?,
+    val latitud: String? = null,
+    val longitud: String? = null
 )

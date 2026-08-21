@@ -19,6 +19,6 @@ val RojoAlerta = Color(0xFFEE2D41)
 
 val AsideFondo = Color(0xFF262638)
 
-val GrisFondoApp = Color(0xFFF3F5F9)
+val GrisFondoApp = Color(0xFFF7F7FD)
 
 val GrisTexto = Color(0xFF6C757D)

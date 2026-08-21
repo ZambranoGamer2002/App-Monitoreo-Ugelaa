@@ -23,8 +23,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -38,7 +36,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -122,7 +119,7 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
     var longitudCaptura by remember { mutableStateOf("0.0") }
     var precisionCaptura by remember { mutableStateOf("0.0") }
 
-    // VALIDACIONES DE SISTEMA
+    //VALIDACIONES DE SISTEMA
     var isGpsEnabled by remember { mutableStateOf(checkGpsStatusLocal(context)) }
     var isAutoTimeEnabled by remember { mutableStateOf(checkAutoTimeEnabledLocal(context)) }
     var isAirplaneModeOn by remember { mutableStateOf(checkAirplaneModeLocal(context)) }
@@ -214,209 +211,255 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
     }
 
     Surface(modifier = Modifier.fillMaxSize(), color = GrisFondoApp) {
-        Column(modifier = Modifier.fillMaxSize()) {
+        Column(modifier = Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
 
-            Box(modifier = Modifier.fillMaxWidth().background(AzulPrincipal, RoundedCornerShape(bottomStart = 32.dp, bottomEnd = 32.dp)).padding(top = 48.dp, bottom = 24.dp, start = 20.dp, end = 20.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = { navController.popBackStack() }, modifier = Modifier.background(Color.White.copy(alpha = 0.2f), CircleShape).size(44.dp)) {
-                        Icon(Icons.Filled.ArrowBack, contentDescription = "Volver", tint = Color.White)
-                    }
-                    Spacer(modifier = Modifier.width(16.dp))
-                    Column {
-                        Text("Registro de Evidencias", color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp)
-                        Text(nombrePlanLimpio, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold, maxLines = 1)
-                    }
-                }
-            }
-
-            if (!isOnline) {
-                Box(modifier = Modifier.fillMaxWidth().background(Color(0xFFEF5350)).padding(4.dp), contentAlignment = Alignment.Center) {
+            // CABECERA PREMIUM (Shadow y bordes curvos profundos)
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(bottomStart = 36.dp, bottomEnd = 36.dp),
+                shadowElevation = 8.dp,
+                color = AzulPrincipal
+            ) {
+                Box(modifier = Modifier.padding(top = 48.dp, bottom = 24.dp, start = 24.dp, end = 24.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Filled.CloudOff, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("MODO OFFLINE ACTIVADO", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        IconButton(
+                            onClick = { navController.popBackStack() },
+                            modifier = Modifier.background(Color.White.copy(alpha = 0.25f), CircleShape).size(48.dp)
+                        ) {
+                            Icon(Icons.Filled.ArrowBack, contentDescription = "Volver", tint = Color.White)
+                        }
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Registro de Evidencias", color = Color.White.copy(alpha = 0.85f), fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                            Text(nombrePlanLimpio, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold, maxLines = 1, letterSpacing = (-0.5).sp)
+                        }
                     }
                 }
             }
 
-            if (isLoadingDetalle && lugaresVisita.isEmpty()) {
-                Box(modifier = Modifier.fillMaxSize().weight(1f), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = AzulPrincipal)
-                }
-            } else if (errorDetalle.isNotEmpty() && lugaresVisita.isEmpty()) {
-                Box(modifier = Modifier.fillMaxSize().weight(1f), contentAlignment = Alignment.Center) {
-                    Text(errorDetalle, color = Color.Red, fontWeight = FontWeight.Bold)
-                }
-            } else {
-                LazyColumn(modifier = Modifier.fillMaxSize().weight(1f).padding(horizontal = 20.dp), contentPadding = PaddingValues(vertical = 16.dp)) {
+            //CONTENEDOR MAESTRO (Para no estirarse en Tablets)
+            Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
 
-                    item {
-                        if (!isSystemReady) {
-                            ElevatedCard(modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp), colors = CardDefaults.elevatedCardColors(containerColor = Color(0xFFFFEBEE))) {
-                                Column(modifier = Modifier.padding(16.dp)) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(Icons.Filled.Warning, null, tint = Color(0xFFD32F2F))
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Text("ALERTA DE SEGURIDAD", fontWeight = FontWeight.Bold, color = Color(0xFFD32F2F))
-                                    }
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    if (isAirplaneModeOn) {
-                                        Text("El Modo Avión está activado. Cámara bloqueada.", color = Color.DarkGray, fontSize = 13.sp)
-                                        TextButton(onClick = { context.startActivity(Intent(Settings.ACTION_AIRPLANE_MODE_SETTINGS)) }) { Text("APAGAR MODO AVIÓN", color = AzulPrincipal) }
-                                    } else if (!isAutoTimeEnabled) {
-                                        Text("La Hora Automática está apagada. Cámara bloqueada.", color = Color.DarkGray, fontSize = 13.sp)
-                                        TextButton(onClick = { context.startActivity(Intent(Settings.ACTION_DATE_SETTINGS)) }) { Text("ARREGLAR HORA", color = AzulPrincipal) }
-                                    } else if (!isGpsEnabled) {
-                                        Text("El GPS está apagado. Cámara bloqueada.", color = Color.DarkGray, fontSize = 13.sp)
-                                        TextButton(onClick = { context.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)) }) { Text("ENCENDER GPS", color = AzulPrincipal) }
+                if (isLoadingDetalle && lugaresVisita.isEmpty()) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = AzulPrincipal, strokeWidth = 4.dp, modifier = Modifier.size(48.dp))
+                    }
+                } else if (errorDetalle.isNotEmpty() && lugaresVisita.isEmpty()) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(errorDetalle, color = Color.Red, fontWeight = FontWeight.Bold)
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.widthIn(max = 700.dp).fillMaxSize(),
+                        contentPadding = PaddingValues(top = 24.dp, bottom = 40.dp, start = 24.dp, end = 24.dp)
+                    ) {
+
+                        item {
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                AnimatedVisibility(visible = !isOnline) {
+                                    Surface(
+                                        color = Color(0xFFFFEBEE),
+                                        shape = RoundedCornerShape(16.dp),
+                                        modifier = Modifier.fillMaxWidth().padding(bottom = 20.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(16.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.Center
+                                        ) {
+                                            Icon(Icons.Filled.CloudOff, contentDescription = null, tint = Color(0xFFD32F2F), modifier = Modifier.size(24.dp))
+                                            Spacer(modifier = Modifier.width(12.dp))
+                                            Text(
+                                                text = "MODO OFFLINE ACTIVADO",
+                                                color = Color(0xFFD32F2F),
+                                                fontWeight = FontWeight.ExtraBold,
+                                                fontSize = 14.sp,
+                                                letterSpacing = 0.5.sp
+                                            )
+                                        }
                                     }
                                 }
                             }
                         }
-                    }
 
-                    items(lugaresVisita) { lugar ->
-                        DiaAccordionItem(
-                            lugar = lugar,
-                            idVisita = idVisita,
-                            isExpanded = diaExpandidoId == lugar.id,
-                            onToggleExpand = {
-                                bitmapPreview = null
-                                diaExpandidoId = if (diaExpandidoId == lugar.id) null else lugar.id
-                            },
-                            isSystemReady = isSystemReady,
-                            context = context,
-                            bitmapPreview = if(previewLugarId == lugar.id) bitmapPreview else null,
-                            previewEtapa = previewEtapa,
-                            fechaCaptura = fechaCaptura,
-                            horaCaptura = horaCaptura,
-                            isUploading = isUploading,
-                            isGpsCargando = isGpsCargando,
-                            latitudCaptura = latitudCaptura,
-                            longitudCaptura = longitudCaptura,
-                            isOnline = isOnline,
-                            onTomarFoto = { etapa ->
-                                previewLugarId = lugar.id
-                                previewEtapa = etapa
-                                bitmapPreview = null
-
-                                val hasCameraPerm = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
-                                if (hasCameraPerm) {
-                                    cameraLauncher.launch()
-                                } else {
-                                    permissionLauncher.launch(arrayOf(Manifest.permission.CAMERA, Manifest.permission.ACCESS_FINE_LOCATION))
-                                }
-                            },
-                            onGuardar = { etapa ->
-                                coroutineScope.launch {
-                                    isUploading = true
-                                    serverErrorDetails = ""
-                                    try {
-                                        val latDestino = lugar.latitud?.toDoubleOrNull()
-                                        val lonDestino = lugar.longitud?.toDoubleOrNull()
-                                        val latUsuario = latitudCaptura.toDoubleOrNull()
-                                        val lonUsuario = longitudCaptura.toDoubleOrNull()
-
-                                        val estadoRed = if (isOnline) "ONLINE (Con señal)" else "OFFLINE (Sin o baja señal)"
-                                        var observacionFinal = ""
-
-                                        if (latDestino != null && lonDestino != null && latUsuario != null && lonUsuario != null && latUsuario != 0.0) {
-                                            val results = FloatArray(1)
-                                            Location.distanceBetween(latDestino, lonDestino, latUsuario, lonUsuario, results)
-                                            val distanciaMetros = results[0].toInt()
-
-                                            val textoDistancia = if (distanciaMetros <= 300) {
-                                                "Dentro del radio ($distanciaMetros m del punto)"
-                                            } else {
-                                                "Fuera del radio ($distanciaMetros m del punto)"
-                                            }
-                                            observacionFinal = "Estado Red: $estadoRed | Ubicación: $textoDistancia"
-                                        } else {
-                                            observacionFinal = "Estado Red: $estadoRed | Ubicación: Distancia desconocida (Faltan coordenadas)"
+                        //ALERTA DE SEGURIDAD
+                        item {
+                            if (!isSystemReady) {
+                                ElevatedCard(
+                                    modifier = Modifier.fillMaxWidth().padding(bottom = 20.dp),
+                                    shape = RoundedCornerShape(16.dp),
+                                    colors = CardDefaults.elevatedCardColors(containerColor = Color(0xFFFFEBEE)),
+                                    elevation = CardDefaults.elevatedCardElevation(defaultElevation = 0.dp)
+                                ) {
+                                    Column(modifier = Modifier.padding(20.dp)) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(Icons.Filled.Warning, null, tint = Color(0xFFD32F2F))
+                                            Spacer(modifier = Modifier.width(10.dp))
+                                            Text("ALERTA DE SEGURIDAD", fontWeight = FontWeight.ExtraBold, color = Color(0xFFD32F2F), fontSize = 15.sp)
                                         }
-
-                                        val nombreArchivo = "visita_${idVisita}_dia_${lugar.id}_${etapa.lowercase()}.jpg"
-                                        val fileFoto = bitmapToFile(context, bitmapPreview!!, nombreArchivo)
-
-                                        if (isOnline) {
-                                            val response = RetrofitClient.apiService.guardarVisita(
-                                                token = "Bearer $tokenGuardado",
-                                                planId = idVisita.toRequestBody("text/plain".toMediaTypeOrNull()),
-                                                usuarioId = nicknameUsuario.toRequestBody("text/plain".toMediaTypeOrNull()),
-                                                estado = etapa.toRequestBody("text/plain".toMediaTypeOrNull()),
-                                                fecha = fechaCaptura.toRequestBody("text/plain".toMediaTypeOrNull()),
-                                                hora = horaCaptura.toRequestBody("text/plain".toMediaTypeOrNull()),
-                                                anio = anioCaptura.toRequestBody("text/plain".toMediaTypeOrNull()),
-                                                mes = mesCaptura.toRequestBody("text/plain".toMediaTypeOrNull()),
-                                                numeroMes = numeroMesCaptura.toRequestBody("text/plain".toMediaTypeOrNull()),
-                                                latitud = latitudCaptura.toRequestBody("text/plain".toMediaTypeOrNull()),
-                                                longitud = longitudCaptura.toRequestBody("text/plain".toMediaTypeOrNull()),
-                                                precisionGps = precisionCaptura.toRequestBody("text/plain".toMediaTypeOrNull()),
-                                                observacion = observacionFinal.toRequestBody("text/plain".toMediaTypeOrNull()),
-                                                foto = MultipartBody.Part.createFormData("foto", fileFoto.name, fileFoto.asRequestBody("image/jpeg".toMediaTypeOrNull()))
-                                            )
-
-                                            if (!response.isSuccessful) {
-                                                serverErrorDetails = "Fallo al subir evidencia. Código HTTP: ${response.code()}"
-                                                return@launch
-                                            }
-                                            mensajeExitoDialog = "La evidencia de $etapa se subió correctamente."
-                                        } else {
-                                            val nuevaEvidenciaOffline = VisitaEvidenciaEntity(
-                                                planId = idVisita, usuarioId = nicknameUsuario, estado = etapa,
-                                                fecha = fechaCaptura, hora = horaCaptura, anio = anioCaptura, mes = mesCaptura,
-                                                numeroMes = numeroMesCaptura, latitud = latitudCaptura, longitud = longitudCaptura,
-                                                precisionGps = precisionCaptura, observacion = observacionFinal,
-                                                rutaFotoLocal = fileFoto.absolutePath
-                                            )
-                                            visitaDao.insertarEvidencia(nuevaEvidenciaOffline)
-                                            mensajeExitoDialog = "Modo Offline. Evidencia guardada en el dispositivo de forma segura."
+                                        Spacer(modifier = Modifier.height(12.dp))
+                                        if (isAirplaneModeOn) {
+                                            Text("El Modo Avión está activado. Cámara bloqueada.", color = Color.DarkGray, fontSize = 13.sp)
+                                            TextButton(onClick = { context.startActivity(Intent(Settings.ACTION_AIRPLANE_MODE_SETTINGS)) }) { Text("APAGAR MODO AVIÓN", color = AzulPrincipal, fontWeight = FontWeight.Bold) }
+                                        } else if (!isAutoTimeEnabled) {
+                                            Text("La Hora Automática está apagada. Cámara bloqueada.", color = Color.DarkGray, fontSize = 13.sp)
+                                            TextButton(onClick = { context.startActivity(Intent(Settings.ACTION_DATE_SETTINGS)) }) { Text("ARREGLAR HORA", color = AzulPrincipal, fontWeight = FontWeight.Bold) }
+                                        } else if (!isGpsEnabled) {
+                                            Text("El GPS está apagado. Cámara bloqueada.", color = Color.DarkGray, fontSize = 13.sp)
+                                            TextButton(onClick = { context.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)) }) { Text("ENCENDER GPS", color = AzulPrincipal, fontWeight = FontWeight.Bold) }
                                         }
-
-                                        // 🔥 AQUÍ SINCRONIZAMOS CON EL HOME SCREEN
-                                        val sharedPref = context.getSharedPreferences("EstadoVisitas", Context.MODE_PRIVATE)
-                                        val nuevoEstadoGlobal = if (etapa == "SALIDA") "COMPLETADO" else etapa
-
-                                        sharedPref.edit()
-                                            .putBoolean("visita_${idVisita}_lugar_${lugar.id}_$etapa", true)
-                                            .putString("visita_${idVisita}_lugar_${lugar.id}_${etapa}_hora", horaCaptura)
-                                            .putString("visita_${idVisita}", nuevoEstadoGlobal) // Avisa a la pantalla de inicio
-                                            .apply()
-
-                                        bitmapPreview = null
-                                        mostrarExitoDialog = true
-
-                                    } catch (e: Exception) {
-                                        serverErrorDetails = "Problema de red o aplicación:\n\n${e.localizedMessage}"
-                                    } finally {
-                                        isUploading = false
                                     }
                                 }
                             }
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
+                        }
+
+                        //ITEMS DEL ACORDEÓN
+                        items(lugaresVisita) { lugar ->
+                            DiaAccordionItem(
+                                lugar = lugar,
+                                idVisita = idVisita,
+                                isExpanded = diaExpandidoId == lugar.id,
+                                onToggleExpand = {
+                                    bitmapPreview = null
+                                    diaExpandidoId = if (diaExpandidoId == lugar.id) null else lugar.id
+                                },
+                                isSystemReady = isSystemReady,
+                                context = context,
+                                bitmapPreview = if(previewLugarId == lugar.id) bitmapPreview else null,
+                                previewEtapa = previewEtapa,
+                                fechaCaptura = fechaCaptura,
+                                horaCaptura = horaCaptura,
+                                isUploading = isUploading,
+                                isGpsCargando = isGpsCargando,
+                                latitudCaptura = latitudCaptura,
+                                longitudCaptura = longitudCaptura,
+                                isOnline = isOnline,
+                                onTomarFoto = { etapa ->
+                                    previewLugarId = lugar.id
+                                    previewEtapa = etapa
+                                    bitmapPreview = null
+
+                                    val hasCameraPerm = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+                                    if (hasCameraPerm) {
+                                        cameraLauncher.launch()
+                                    } else {
+                                        permissionLauncher.launch(arrayOf(Manifest.permission.CAMERA, Manifest.permission.ACCESS_FINE_LOCATION))
+                                    }
+                                },
+                                onGuardar = { etapa ->
+                                    coroutineScope.launch {
+                                        isUploading = true
+                                        serverErrorDetails = ""
+                                        try {
+                                            val latDestino = lugar.latitud?.toDoubleOrNull()
+                                            val lonDestino = lugar.longitud?.toDoubleOrNull()
+                                            val latUsuario = latitudCaptura.toDoubleOrNull()
+                                            val lonUsuario = longitudCaptura.toDoubleOrNull()
+
+                                            val estadoRed = if (isOnline) "ONLINE (Con señal)" else "OFFLINE (Sin o baja señal)"
+                                            var observacionFinal = ""
+
+                                            if (latDestino != null && lonDestino != null && latUsuario != null && lonUsuario != null && latUsuario != 0.0) {
+                                                val results = FloatArray(1)
+                                                Location.distanceBetween(latDestino, lonDestino, latUsuario, lonUsuario, results)
+                                                val distanciaMetros = results[0].toInt()
+
+                                                val textoDistancia = if (distanciaMetros <= 300) {
+                                                    "Dentro del radio ($distanciaMetros m del punto)"
+                                                } else {
+                                                    "Fuera del radio ($distanciaMetros m del punto)"
+                                                }
+                                                observacionFinal = "Estado Red: $estadoRed | Ubicación: $textoDistancia"
+                                            } else {
+                                                observacionFinal = "Estado Red: $estadoRed | Ubicación: Distancia desconocida (Faltan coordenadas)"
+                                            }
+
+                                            val nombreArchivo = "visita_${idVisita}_dia_${lugar.id}_${etapa.lowercase()}.jpg"
+                                            val fileFoto = bitmapToFile(context, bitmapPreview!!, nombreArchivo)
+
+                                            if (isOnline) {
+                                                val response = RetrofitClient.apiService.guardarVisita(
+                                                    token = "Bearer $tokenGuardado",
+                                                    planId = idVisita.toRequestBody("text/plain".toMediaTypeOrNull()),
+                                                    usuarioId = nicknameUsuario.toRequestBody("text/plain".toMediaTypeOrNull()),
+                                                    estado = etapa.toRequestBody("text/plain".toMediaTypeOrNull()),
+                                                    fecha = fechaCaptura.toRequestBody("text/plain".toMediaTypeOrNull()),
+                                                    hora = horaCaptura.toRequestBody("text/plain".toMediaTypeOrNull()),
+                                                    anio = anioCaptura.toRequestBody("text/plain".toMediaTypeOrNull()),
+                                                    mes = mesCaptura.toRequestBody("text/plain".toMediaTypeOrNull()),
+                                                    numeroMes = numeroMesCaptura.toRequestBody("text/plain".toMediaTypeOrNull()),
+                                                    latitud = latitudCaptura.toRequestBody("text/plain".toMediaTypeOrNull()),
+                                                    longitud = longitudCaptura.toRequestBody("text/plain".toMediaTypeOrNull()),
+                                                    precisionGps = precisionCaptura.toRequestBody("text/plain".toMediaTypeOrNull()),
+                                                    observacion = observacionFinal.toRequestBody("text/plain".toMediaTypeOrNull()),
+                                                    foto = MultipartBody.Part.createFormData("foto", fileFoto.name, fileFoto.asRequestBody("image/jpeg".toMediaTypeOrNull()))
+                                                )
+
+                                                if (!response.isSuccessful) {
+                                                    serverErrorDetails = "Fallo al subir evidencia. Código HTTP: ${response.code()}"
+                                                    return@launch
+                                                }
+                                                mensajeExitoDialog = "La evidencia de $etapa se subió correctamente."
+                                            } else {
+                                                val nuevaEvidenciaOffline = VisitaEvidenciaEntity(
+                                                    planId = idVisita, usuarioId = nicknameUsuario, estado = etapa,
+                                                    fecha = fechaCaptura, hora = horaCaptura, anio = anioCaptura, mes = mesCaptura,
+                                                    numeroMes = numeroMesCaptura, latitud = latitudCaptura, longitud = longitudCaptura,
+                                                    precisionGps = precisionCaptura, observacion = observacionFinal,
+                                                    rutaFotoLocal = fileFoto.absolutePath
+                                                )
+                                                visitaDao.insertarEvidencia(nuevaEvidenciaOffline)
+                                                mensajeExitoDialog = "Modo Offline. Evidencia guardada en el dispositivo de forma segura."
+                                            }
+
+                                            // Sincronización global
+                                            val sharedPref = context.getSharedPreferences("EstadoVisitas", Context.MODE_PRIVATE)
+                                            val nuevoEstadoGlobal = if (etapa == "SALIDA") "COMPLETADO" else etapa
+
+                                            sharedPref.edit()
+                                                .putBoolean("visita_${idVisita}_lugar_${lugar.id}_$etapa", true)
+                                                .putString("visita_${idVisita}_lugar_${lugar.id}_${etapa}_hora", horaCaptura)
+                                                .putString("visita_${idVisita}", nuevoEstadoGlobal)
+                                                .apply()
+
+                                            bitmapPreview = null
+                                            mostrarExitoDialog = true
+
+                                        } catch (e: Exception) {
+                                            serverErrorDetails = "Problema de red o aplicación:\n\n${e.localizedMessage}"
+                                        } finally {
+                                            isUploading = false
+                                        }
+                                    }
+                                }
+                            )
+                            Spacer(modifier = Modifier.height(20.dp))
+                        }
                     }
                 }
             }
         }
 
+        // DIÁLOGOS
         if (mostrarExitoDialog) {
             AlertDialog(
                 onDismissRequest = { },
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(if (isOnline) Icons.Filled.CheckCircle else Icons.Filled.CloudOff, null, tint = if(isOnline) Color(0xFF4CAF50) else Color(0xFFF57C00))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(if (isOnline) "Guardado Exitoso" else "Guardado Local", color = AsideFondo, fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(if (isOnline) "Guardado Exitoso" else "Guardado Local", color = AsideFondo, fontWeight = FontWeight.ExtraBold)
                     }
                 },
-                text = { Text(mensajeExitoDialog, color = GrisTexto) },
+                text = { Text(mensajeExitoDialog, color = GrisTexto, fontSize = 15.sp) },
                 confirmButton = {
-                    Button(onClick = { mostrarExitoDialog = false }, colors = ButtonDefaults.buttonColors(containerColor = AzulPrincipal)) {
-                        Text("CONTINUAR", color = Color.White, fontWeight = FontWeight.Bold)
+                    Button(onClick = { mostrarExitoDialog = false }, colors = ButtonDefaults.buttonColors(containerColor = AzulPrincipal), shape = RoundedCornerShape(12.dp)) {
+                        Text("CONTINUAR", color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 8.dp))
                     }
                 },
-                containerColor = Color.White
+                containerColor = Color.White,
+                shape = RoundedCornerShape(20.dp),
+                tonalElevation = 8.dp
             )
         }
 
@@ -426,12 +469,14 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Filled.Error, contentDescription = null, tint = Color.Red)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Error de Conexión", color = Color.Red, fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text("Error de Conexión", color = Color.Red, fontWeight = FontWeight.ExtraBold)
                     }
                 },
-                text = { Text(serverErrorDetails, fontSize = 12.sp) },
-                confirmButton = { TextButton(onClick = { serverErrorDetails = "" }) { Text("CERRAR") } }
+                text = { Text(serverErrorDetails, fontSize = 13.sp) },
+                confirmButton = { TextButton(onClick = { serverErrorDetails = "" }) { Text("CERRAR", fontWeight = FontWeight.Bold) } },
+                containerColor = Color.White,
+                shape = RoundedCornerShape(20.dp)
             )
         }
     }
@@ -467,37 +512,38 @@ fun DiaAccordionItem(
     val iconRotation by animateFloatAsState(targetValue = if (isExpanded) 180f else 0f)
 
     ElevatedCard(
-        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)),
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)), // Bordes más curvos
         colors = CardDefaults.elevatedCardColors(containerColor = if (etapaActiva == "COMPLETADO") Color(0xFFF1F8E9) else Color.White),
-        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 4.dp)
+        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 6.dp)
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
             Row(
-                modifier = Modifier.fillMaxWidth().clickable { onToggleExpand() }.padding(16.dp),
+                modifier = Modifier.fillMaxWidth().clickable { onToggleExpand() }.padding(20.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Box(modifier = Modifier.size(44.dp).background(if (etapaActiva == "COMPLETADO") Color(0xFF4CAF50) else AzulPrincipal.copy(alpha=0.1f), CircleShape), contentAlignment = Alignment.Center) {
-                    if (etapaActiva == "COMPLETADO") Icon(Icons.Filled.Check, null, tint = Color.White)
-                    else Icon(Icons.Filled.DateRange, null, tint = AzulPrincipal)
+                Box(modifier = Modifier.size(48.dp).background(if (etapaActiva == "COMPLETADO") Color(0xFF4CAF50) else AzulPrincipal.copy(alpha=0.1f), CircleShape), contentAlignment = Alignment.Center) {
+                    if (etapaActiva == "COMPLETADO") Icon(Icons.Filled.Check, null, tint = Color.White, modifier = Modifier.size(24.dp))
+                    else Icon(Icons.Filled.DateRange, null, tint = AzulPrincipal, modifier = Modifier.size(24.dp))
                 }
                 Spacer(modifier = Modifier.width(16.dp))
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("Fecha: ${lugar.fecha}", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = AsideFondo)
-                    Text(lugar.lugares, color = GrisTexto, fontSize = 12.sp, maxLines = 1)
+                    Text("Fecha: ${lugar.fecha}", fontWeight = FontWeight.ExtraBold, fontSize = 17.sp, color = AsideFondo, letterSpacing = (-0.2).sp)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(lugar.lugares, color = GrisTexto, fontSize = 13.sp, maxLines = 1, lineHeight = 18.sp)
                 }
-                Icon(Icons.Filled.KeyboardArrowDown, null, tint = GrisTexto, modifier = Modifier.rotate(iconRotation))
+                Icon(Icons.Filled.KeyboardArrowDown, null, tint = GrisTexto, modifier = Modifier.rotate(iconRotation).size(28.dp))
             }
 
             AnimatedVisibility(visible = isExpanded) {
-                Column(modifier = Modifier.fillMaxWidth().background(Color(0xFFFAFAFA)).padding(16.dp)) {
+                Column(modifier = Modifier.fillMaxWidth().background(Color(0xFFFAFAFA)).padding(20.dp)) {
                     if (etapaActiva == "COMPLETADO") {
                         Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Filled.Star, contentDescription = null, tint = Color(0xFFF57C00))
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Evidencias Completadas", color = Color(0xFF2E7D32), fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                Icon(Icons.Filled.Star, contentDescription = null, tint = Color(0xFFF57C00), modifier = Modifier.size(22.dp))
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Text("Evidencias Completadas", color = Color(0xFF2E7D32), fontWeight = FontWeight.ExtraBold, fontSize = 16.sp)
                             }
-                            Spacer(modifier = Modifier.height(16.dp))
+                            Spacer(modifier = Modifier.height(20.dp))
                             CapturedPhotoItem("ENTRADA", horaEntrada, idVisita, lugar.id, context)
                             CapturedPhotoItem("MEDIO", horaMedio, idVisita, lugar.id, context)
                             CapturedPhotoItem("SALIDA", horaSalida, idVisita, lugar.id, context)
@@ -515,28 +561,42 @@ fun DiaAccordionItem(
 
 @Composable
 fun CapturedPhotoItem(etapa: String, hora: String, idVisita: String, idLugar: Int, context: Context) {
-    val bitmap = remember(idVisita, idLugar, etapa) { getSavedBitmap(context, idVisita, idLugar, etapa) }
+    // Usamos un estado para el bitmap para que la UI no se congele esperando
+    var bitmap by remember { mutableStateOf<Bitmap?>(null) }
+
+    LaunchedEffect(idVisita, idLugar, etapa) {
+        bitmap = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            getSavedBitmap(context, idVisita, idLugar, etapa)
+        }
+    }
 
     ElevatedCard(
-        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-        shape = RoundedCornerShape(8.dp),
-        colors = CardDefaults.elevatedCardColors(containerColor = Color.White)
+        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.elevatedCardColors(containerColor = Color.White),
+        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp)
     ) {
-        Row(modifier = Modifier.padding(8.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Row(modifier = Modifier.padding(12.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             if (bitmap != null) {
-                Image(bitmap = bitmap.asImageBitmap(), contentDescription = null, modifier = Modifier.size(60.dp).clip(RoundedCornerShape(6.dp)), contentScale = ContentScale.Crop)
+                Image(
+                    bitmap = bitmap!!.asImageBitmap(),
+                    contentDescription = null,
+                    modifier = Modifier.size(64.dp).clip(RoundedCornerShape(8.dp)),
+                    contentScale = ContentScale.Crop
+                )
             } else {
-                Box(modifier = Modifier.size(60.dp).background(Color.LightGray, RoundedCornerShape(6.dp)), contentAlignment = Alignment.Center) {
+                Box(modifier = Modifier.size(64.dp).background(Color(0xFFEEEEEE), RoundedCornerShape(8.dp)), contentAlignment = Alignment.Center) {
                     Icon(Icons.Filled.ImageNotSupported, contentDescription = null, tint = Color.Gray)
                 }
             }
-            Spacer(modifier = Modifier.width(12.dp))
+            Spacer(modifier = Modifier.width(16.dp))
             Column {
-                Text(text = "Registro $etapa", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = AzulPrincipal)
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
-                    Icon(Icons.Filled.AccessTime, contentDescription = null, modifier = Modifier.size(12.dp), tint = GrisTexto)
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(text = hora.ifEmpty { "Hora no registrada" }, fontSize = 12.sp, color = GrisTexto)
+                Text(text = "Registro $etapa", fontWeight = FontWeight.ExtraBold, fontSize = 15.sp, color = AzulPrincipal)
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Filled.AccessTime, contentDescription = null, modifier = Modifier.size(14.dp), tint = GrisTexto)
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(text = hora.ifEmpty { "Hora no registrada" }, fontSize = 13.sp, color = GrisTexto, fontWeight = FontWeight.Medium)
                 }
             }
         }
@@ -551,84 +611,91 @@ fun TimelineNode(
     onTomarFoto: () -> Unit, onGuardar: () -> Unit, isLast: Boolean
 ) {
     Row(modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.width(30.dp)) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.width(36.dp)) {
             val colorCirculo = if (isGuardado) Color(0xFF4CAF50) else if (isActive) AzulPrincipal else Color.LightGray
-            Box(modifier = Modifier.size(20.dp).background(colorCirculo, CircleShape).border(3.dp, Color.White, CircleShape)) {
-                if (isGuardado) Icon(Icons.Filled.Check, null, tint = Color.White, modifier = Modifier.size(14.dp).align(Alignment.Center))
+            Box(modifier = Modifier.size(24.dp).background(colorCirculo, CircleShape).border(3.dp, Color.White, CircleShape)) {
+                if (isGuardado) Icon(Icons.Filled.Check, null, tint = Color.White, modifier = Modifier.size(16.dp).align(Alignment.Center))
             }
             if (!isLast) {
-                Box(modifier = Modifier.weight(1f).width(2.dp).background(if (isGuardado) Color(0xFF4CAF50).copy(alpha = 0.5f) else Color.LightGray.copy(alpha = 0.5f)))
+                Box(modifier = Modifier.weight(1f).width(2.5.dp).background(if (isGuardado) Color(0xFF4CAF50).copy(alpha = 0.5f) else Color.LightGray.copy(alpha = 0.5f)))
             }
         }
 
         val cardAlpha = if (isGuardado || isActive) 1f else 0.5f
 
         ElevatedCard(
-            modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp, start = 8.dp),
-            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier.fillMaxWidth().padding(bottom = 20.dp, start = 12.dp),
+            shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.elevatedCardColors(containerColor = if(isActive) Color.White else if(isGuardado) Color(0xFFFAFAFA) else Color.Transparent),
-            elevation = CardDefaults.elevatedCardElevation(defaultElevation = if(isActive) 2.dp else 0.dp)
+            elevation = CardDefaults.elevatedCardElevation(defaultElevation = if(isActive) 6.dp else 0.dp)
         ) {
-            Column(modifier = Modifier.padding(12.dp).alpha(cardAlpha)) {
-                Text(text = titulo, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = if (isGuardado) Color(0xFF2E7D32) else AsideFondo)
-                Spacer(modifier = Modifier.height(8.dp))
+            Column(modifier = Modifier.padding(16.dp).alpha(cardAlpha)) {
+                Text(text = titulo, fontWeight = FontWeight.ExtraBold, fontSize = 15.sp, color = if (isGuardado) Color(0xFF2E7D32) else AsideFondo)
+                Spacer(modifier = Modifier.height(10.dp))
 
                 if (isActive) {
                     if (!isDateValid) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Filled.Block, null, tint = Color.Red, modifier = Modifier.size(16.dp)); Spacer(modifier = Modifier.width(6.dp))
-                            Text(if (fechaStatus == "PASADA") "Fecha culminada. Registro cerrado." else "Aún no es la fecha programada.", color = Color.Red, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Icon(Icons.Filled.Block, null, tint = Color.Red, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(if (fechaStatus == "PASADA") "Fecha culminada. Registro cerrado." else "Aún no es la fecha programada.", color = Color.Red, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                         }
                     } else if (isUploading) {
-                        Box(modifier = Modifier.fillMaxWidth().padding(12.dp), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator(color = AzulPrincipal, modifier = Modifier.size(24.dp))
+                        Box(modifier = Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator(color = AzulPrincipal, strokeWidth = 3.dp, modifier = Modifier.size(32.dp))
                         }
                     } else if (bitmapActual != null) {
-                        Image(bitmap = bitmapActual.asImageBitmap(), contentDescription = null, modifier = Modifier.fillMaxWidth().height(140.dp).clip(RoundedCornerShape(8.dp)), contentScale = ContentScale.Crop)
+                        Image(bitmap = bitmapActual.asImageBitmap(), contentDescription = null, modifier = Modifier.fillMaxWidth().height(160.dp).clip(RoundedCornerShape(12.dp)), contentScale = ContentScale.Crop)
 
-                        Column(modifier = Modifier.padding(vertical = 8.dp).fillMaxWidth().background(Color(0xFFEEEEEE), RoundedCornerShape(4.dp)).padding(6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Column(modifier = Modifier.padding(vertical = 12.dp).fillMaxWidth().background(Color(0xFFEEEEEE), RoundedCornerShape(8.dp)).padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Filled.AccessTime, null, tint = GrisTexto, modifier = Modifier.size(12.dp)); Spacer(modifier = Modifier.width(4.dp))
-                                Text("Capturado: $horaCaptura", color = GrisTexto, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                                Icon(Icons.Filled.AccessTime, null, tint = GrisTexto, modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Capturado: $horaCaptura", color = GrisTexto, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                             }
-                            Spacer(modifier = Modifier.height(4.dp))
+                            Spacer(modifier = Modifier.height(6.dp))
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Filled.LocationOn, null, tint = if(isGpsCargando) Color(0xFFE65100) else Color(0xFF2E7D32), modifier = Modifier.size(12.dp)); Spacer(modifier = Modifier.width(4.dp))
-                                Text(if(isGpsCargando) "Obteniendo coordenadas satelitales..." else "GPS: $latitudCaptura, $longitudCaptura", color = if(isGpsCargando) Color(0xFFE65100) else Color(0xFF2E7D32), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                Icon(Icons.Filled.LocationOn, null, tint = if(isGpsCargando) Color(0xFFE65100) else Color(0xFF2E7D32), modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(if(isGpsCargando) "Obteniendo coordenadas satelitales..." else "GPS: $latitudCaptura, $longitudCaptura", color = if(isGpsCargando) Color(0xFFE65100) else Color(0xFF2E7D32), fontSize = 11.sp, fontWeight = FontWeight.ExtraBold)
                             }
                         }
 
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                            TextButton(onClick = onTomarFoto, enabled = isSystemReady) { Text("REPETIR", color = AzulPrincipal, fontSize = 12.sp, fontWeight = FontWeight.Bold) }
+                            TextButton(onClick = onTomarFoto, enabled = isSystemReady) { Text("REPETIR", color = AzulPrincipal, fontSize = 13.sp, fontWeight = FontWeight.ExtraBold) }
 
                             if (isGpsCargando) {
-                                Button(onClick = {}, enabled = false, colors = ButtonDefaults.buttonColors(containerColor = Color.Gray), contentPadding = PaddingValues(horizontal = 16.dp)) {
-                                    Text("UBICANDO...", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                Button(onClick = {}, enabled = false, colors = ButtonDefaults.buttonColors(containerColor = Color.Gray), shape = RoundedCornerShape(10.dp), contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp)) {
+                                    Text("UBICANDO...", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                                 }
                             } else {
-                                Button(onClick = onGuardar, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50)), contentPadding = PaddingValues(horizontal = 16.dp)) {
-                                    Text("GUARDAR", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                Button(onClick = onGuardar, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50)), shape = RoundedCornerShape(10.dp), contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp)) {
+                                    Text("GUARDAR", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp, letterSpacing = 0.5.sp)
                                 }
                             }
                         }
                     } else {
                         OutlinedButton(
-                            onClick = onTomarFoto, modifier = Modifier.fillMaxWidth().height(40.dp), shape = RoundedCornerShape(8.dp), enabled = isSystemReady,
+                            onClick = onTomarFoto, modifier = Modifier.fillMaxWidth().height(48.dp), shape = RoundedCornerShape(12.dp), enabled = isSystemReady,
                             colors = ButtonDefaults.outlinedButtonColors(contentColor = AzulPrincipal),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, if(!isSystemReady) Color.Red.copy(alpha=0.3f) else AzulPrincipal.copy(alpha=0.5f))
+                            border = androidx.compose.foundation.BorderStroke(1.5.dp, if(!isSystemReady) Color.Red.copy(alpha=0.3f) else AzulPrincipal.copy(alpha=0.5f))
                         ) {
-                            Icon(Icons.Filled.PhotoCamera, null, modifier = Modifier.size(16.dp)); Spacer(modifier = Modifier.width(8.dp)); Text("TOMAR FOTO", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Icon(Icons.Filled.PhotoCamera, null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text("TOMAR FOTO", fontSize = 13.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 0.5.sp)
                         }
                     }
                 } else if (!isGuardado) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Filled.Lock, null, tint = Color.LightGray, modifier = Modifier.size(14.dp)); Spacer(modifier = Modifier.width(4.dp))
-                        Text("Bloqueado", color = Color.Gray, fontSize = 11.sp)
+                        Icon(Icons.Filled.Lock, null, tint = Color.LightGray, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Bloqueado", color = Color.Gray, fontSize = 12.sp, fontWeight = FontWeight.Medium)
                     }
                 } else {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Filled.Check, null, tint = Color(0xFF2E7D32), modifier = Modifier.size(14.dp)); Spacer(modifier = Modifier.width(4.dp))
-                        Text("Guardado a las $horaGuardada", color = Color(0xFF2E7D32), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Icon(Icons.Filled.Check, null, tint = Color(0xFF2E7D32), modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Guardado a las $horaGuardada", color = Color(0xFF2E7D32), fontSize = 12.sp, fontWeight = FontWeight.ExtraBold)
                     }
                 }
             }
@@ -636,15 +703,21 @@ fun TimelineNode(
     }
 }
 
-// 🔥 AQUÍ ESTÁ LA MAGIA PARA QUE TUS FOTOS JAMÁS SE BORREN SOLAS 🔥
 fun getSavedBitmap(context: Context, idVisita: String, idLugar: Int, etapa: String): Bitmap? {
     val fileName = "visita_${idVisita}_dia_${idLugar}_${etapa.lowercase()}.jpg"
-    val file = File(context.filesDir, fileName) // Cambiado a filesDir (Bóveda Segura)
-    return if (file.exists()) BitmapFactory.decodeFile(file.absolutePath) else null
-}
+    val file = File(context.filesDir, fileName)
 
+    if (!file.exists()) return null
+
+    // Le decimos a Android que reduzca la calidad al leer la imagen porque solo es para una miniatura
+    val options = BitmapFactory.Options().apply {
+        inSampleSize = 8 // Reduce el peso de la imagen a 1/64 en memoria RAM
+    }
+
+    return BitmapFactory.decodeFile(file.absolutePath, options)
+}
 fun bitmapToFile(context: Context, bitmap: Bitmap, fileName: String): File {
-    val file = File(context.filesDir, fileName) // Cambiado a filesDir (Bóveda Segura)
+    val file = File(context.filesDir, fileName)
     file.createNewFile()
     val bos = FileOutputStream(file)
     bitmap.compress(Bitmap.CompressFormat.JPEG, 80, bos)
