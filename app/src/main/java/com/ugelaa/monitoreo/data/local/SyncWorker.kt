@@ -5,7 +5,7 @@ import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.ugelaa.monitoreo.data.RetrofitClient
 import com.ugelaa.monitoreo.utils.SessionManager
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.firstOrNull
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.asRequestBody
@@ -20,25 +20,32 @@ class SyncWorker(
     override suspend fun doWork(): Result {
         val database = AppDatabase.getDatabase(context)
         val visitaDao = database.visitaDao()
+
+        val evidenciasPendientes = visitaDao.obtenerEvidenciasPendientes()
+
+        if (evidenciasPendientes.isEmpty()) {
+            return Result.success()
+        }
+
         val sessionManager = SessionManager(context)
+        val token = sessionManager.getToken.firstOrNull() ?: return Result.failure()
 
-        val token = sessionManager.getToken.first()
-        if (token.isEmpty()) return Result.failure()
+        var allSuccessful = true
 
-        val pendientes = visitaDao.obtenerEvidenciasPendientes()
-        if (pendientes.isEmpty()) return Result.success()
+        for (evidencia in evidenciasPendientes) {
+            val file = File(evidencia.rutaFotoLocal)
 
-        for (evidencia in pendientes) {
+            if (!file.exists()) {
+                visitaDao.eliminarEvidencia(evidencia)
+                continue
+            }
+
             try {
-                val fileFoto = File(evidencia.rutaFotoLocal)
-                if (!fileFoto.exists()) {
-                    visitaDao.eliminarEvidencia(evidencia)
-                    continue
-                }
-
                 val response = RetrofitClient.apiService.guardarVisita(
                     token = "Bearer $token",
                     planId = evidencia.planId.toRequestBody("text/plain".toMediaTypeOrNull()),
+                    lugaresVisitasId = evidencia.lugaresVisitasId.toRequestBody("text/plain".toMediaTypeOrNull()),
+                    estadoVisita = evidencia.estadoVisita.toRequestBody("text/plain".toMediaTypeOrNull()),
                     usuarioId = evidencia.usuarioId.toRequestBody("text/plain".toMediaTypeOrNull()),
                     estado = evidencia.estado.toRequestBody("text/plain".toMediaTypeOrNull()),
                     fecha = evidencia.fecha.toRequestBody("text/plain".toMediaTypeOrNull()),
@@ -49,23 +56,23 @@ class SyncWorker(
                     latitud = evidencia.latitud.toRequestBody("text/plain".toMediaTypeOrNull()),
                     longitud = evidencia.longitud.toRequestBody("text/plain".toMediaTypeOrNull()),
                     precisionGps = evidencia.precisionGps.toRequestBody("text/plain".toMediaTypeOrNull()),
-                    observacion = evidencia.observacion.toRequestBody("text/plain".toMediaTypeOrNull()), // 🔥 AHORA EL WORKER TAMBIÉN MANDA LA OBSERVACIÓN
-                    foto = MultipartBody.Part.createFormData(
-                        "foto",
-                        fileFoto.name,
-                        fileFoto.asRequestBody("image/jpeg".toMediaTypeOrNull())
-                    )
+                    observacion = evidencia.observacion.toRequestBody("text/plain".toMediaTypeOrNull()),
+                    foto = MultipartBody.Part.createFormData("foto", file.name, file.asRequestBody("image/jpeg".toMediaTypeOrNull()))
                 )
 
                 if (response.isSuccessful) {
-                    visitaDao.eliminarEvidencia(evidencia)
-                }
 
+                    visitaDao.eliminarEvidencia(evidencia)
+                    file.delete()
+                } else {
+
+                    allSuccessful = false
+                }
             } catch (e: Exception) {
-                return Result.retry()
+                allSuccessful = false
             }
         }
-
-        return Result.success()
+        
+        return if (allSuccessful) Result.success() else Result.retry()
     }
 }

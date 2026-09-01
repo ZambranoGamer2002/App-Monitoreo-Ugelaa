@@ -7,6 +7,8 @@ import androidx.room.PrimaryKey
 data class VisitaEvidenciaEntity(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
     val planId: String,
+    val lugaresVisitasId: String,
+    val estadoVisita: String,
     val usuarioId: String,
     val estado: String,
     val fecha: String,

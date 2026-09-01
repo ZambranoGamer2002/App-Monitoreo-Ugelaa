@@ -5,7 +5,7 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 
-@Database(entities = [VisitaEvidenciaEntity::class], version = 2, exportSchema = false) // Puedes subir la versión a 2
+@Database(entities = [VisitaEvidenciaEntity::class], version = 3, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
 
     abstract fun visitaDao(): VisitaDao

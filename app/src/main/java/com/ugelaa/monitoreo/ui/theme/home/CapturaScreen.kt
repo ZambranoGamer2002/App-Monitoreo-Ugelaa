@@ -8,7 +8,9 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.location.Location
 import android.location.LocationManager
+import android.net.Uri
 import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.launch
@@ -25,6 +27,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.rounded.Map
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -60,7 +63,9 @@ import com.ugelaa.monitoreo.ui.theme.GrisFondoApp
 import com.ugelaa.monitoreo.ui.theme.GrisTexto
 import com.ugelaa.monitoreo.utils.SessionManager
 import com.ugelaa.monitoreo.utils.observeConnectivityAsFlow
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.asRequestBody
@@ -94,37 +99,82 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
 
     val sharedPrefCache = context.getSharedPreferences("CacheVisitas", Context.MODE_PRIVATE)
     var lugaresVisita by remember { mutableStateOf<List<LugarVisita>>(emptyList()) }
-    var isLoadingDetalle by remember { mutableStateOf(true) }
     var errorDetalle by remember { mutableStateOf("") }
 
     var diaExpandidoId by remember { mutableStateOf<Int?>(null) }
-
     var bitmapPreview by remember { mutableStateOf<Bitmap?>(null) }
     var previewLugarId by remember { mutableStateOf<Int?>(null) }
     var previewEtapa by remember { mutableStateOf<String>("") }
 
     var isUploading by remember { mutableStateOf(false) }
+    var isLoadingDetalle by remember { mutableStateOf(false) }
     var isGpsCargando by remember { mutableStateOf(false) }
     var serverErrorDetails by remember { mutableStateOf("") }
     var mostrarExitoDialog by remember { mutableStateOf(false) }
     var mensajeExitoDialog by remember { mutableStateOf("") }
+
+    var refreshTrigger by remember { mutableStateOf(0) }
 
     var fechaCaptura by remember { mutableStateOf("") }
     var horaCaptura by remember { mutableStateOf("") }
     var anioCaptura by remember { mutableStateOf("") }
     var mesCaptura by remember { mutableStateOf("") }
     var numeroMesCaptura by remember { mutableStateOf("") }
-
     var latitudCaptura by remember { mutableStateOf("0.0") }
     var longitudCaptura by remember { mutableStateOf("0.0") }
     var precisionCaptura by remember { mutableStateOf("0.0") }
 
-    //VALIDACIONES DE SISTEMA
     var isGpsEnabled by remember { mutableStateOf(checkGpsStatusLocal(context)) }
     var isAutoTimeEnabled by remember { mutableStateOf(checkAutoTimeEnabledLocal(context)) }
     var isAirplaneModeOn by remember { mutableStateOf(checkAirplaneModeLocal(context)) }
 
     val isSystemReady = isGpsEnabled && isAutoTimeEnabled && !isAirplaneModeOn
+
+    val cargarDetalle = {
+        coroutineScope.launch {
+            if (tokenGuardado.isNotEmpty()) {
+                isLoadingDetalle = true
+                try {
+                    val response = RetrofitClient.apiService.getDetalleVisita(planId = idVisita, token = "Bearer $tokenGuardado")
+                    if (response.isSuccessful && response.body() != null) {
+                        val listaApi = response.body()!!
+
+                        val evidenciasPendientes = visitaDao.obtenerEvidenciasPendientes()
+                        val lugaresProtegidos = evidenciasPendientes.map { it.lugaresVisitasId }.toSet()
+
+                        val lugaresVencidos = listaApi.filter {
+                            getFechaStatus(it.fecha) == "PASADA" &&
+                                    it.estado?.uppercase(Locale.ROOT) != "NO CULMINADO" &&
+                                    it.estado?.uppercase(Locale.ROOT) != "CULMINADO" &&
+                                    it.estado?.uppercase(Locale.ROOT) != "COMPLETADO" &&
+                                    !lugaresProtegidos.contains(it.id.toString())
+                        }.map { it.id }
+
+                        if (lugaresVencidos.isNotEmpty()) {
+                            try {
+                                RetrofitClient.apiService.marcarLugaresVencidos("Bearer $tokenGuardado", lugaresVencidos)
+                                // Actualizamos la lista local en caliente
+                                val listaActualizada = listaApi.map { lugar ->
+                                    if (lugaresVencidos.contains(lugar.id)) lugar.copy(estado = "NO CULMINADO") else lugar
+                                }
+                                lugaresVisita = listaActualizada
+                            } catch (e: Exception) {
+                                lugaresVisita = listaApi
+                            }
+                        } else {
+                            lugaresVisita = listaApi
+                        }
+
+                        sharedPrefCache.edit().putString("detalle_${idVisita}", gson.toJson(lugaresVisita)).apply()
+                    }
+                } catch (e: Exception) {
+                    if (lugaresVisita.isEmpty()) errorDetalle = "Sin internet. Mostrando vista local si existe."
+                } finally {
+                    isLoadingDetalle = false
+                }
+            }
+        }
+    }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -132,6 +182,7 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
                 isGpsEnabled = checkGpsStatusLocal(context)
                 isAutoTimeEnabled = checkAutoTimeEnabledLocal(context)
                 isAirplaneModeOn = checkAirplaneModeLocal(context)
+                cargarDetalle()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -146,22 +197,8 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
                 lugaresVisita = gson.fromJson(jsonOffline, type)
             } catch (e: Exception) {}
         }
-
-        if (tokenGuardado.isNotEmpty()) {
-            try {
-                isLoadingDetalle = true
-                val response = RetrofitClient.apiService.getDetalleVisita(planId = idVisita, token = "Bearer $tokenGuardado")
-                if (response.isSuccessful && response.body() != null) {
-                    lugaresVisita = response.body()!!
-                    sharedPrefCache.edit().putString("detalle_${idVisita}", gson.toJson(lugaresVisita)).apply()
-                }
-            } catch (e: Exception) {
-                if (lugaresVisita.isEmpty()) errorDetalle = "Sin internet y sin datos guardados para este plan."
-            } finally {
-                isLoadingDetalle = false
-            }
-        } else {
-            isLoadingDetalle = false
+        if (tokenGuardado.isNotEmpty() && lugaresVisita.isEmpty()) {
+            cargarDetalle()
         }
     }
 
@@ -179,21 +216,51 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
 
             if (ActivityCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
                 isGpsCargando = true
+                var gpsResuelto = false
+
                 fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, CancellationTokenSource().token)
                     .addOnSuccessListener { location ->
-                        if (location != null) {
-                            latitudCaptura = location.latitude.toString()
-                            longitudCaptura = location.longitude.toString()
-                            precisionCaptura = location.accuracy.toString()
-                        } else {
-                            latitudCaptura = "0.0"; longitudCaptura = "0.0"; precisionCaptura = "0.0"
+                        if (!gpsResuelto) {
+                            gpsResuelto = true
+                            if (location != null) {
+                                latitudCaptura = location.latitude.toString()
+                                longitudCaptura = location.longitude.toString()
+                                precisionCaptura = location.accuracy.toString()
+                            } else {
+                                latitudCaptura = "0.0"; longitudCaptura = "0.0"; precisionCaptura = "0.0"
+                            }
+                            isGpsCargando = false
                         }
-                        isGpsCargando = false
                     }
                     .addOnFailureListener {
-                        latitudCaptura = "0.0"; longitudCaptura = "0.0"; precisionCaptura = "0.0"
-                        isGpsCargando = false
+                        if (!gpsResuelto) {
+                            gpsResuelto = true
+                            latitudCaptura = "0.0"; longitudCaptura = "0.0"; precisionCaptura = "0.0"
+                            isGpsCargando = false
+                        }
                     }
+
+                coroutineScope.launch {
+                    kotlinx.coroutines.delay(7000L)
+                    if (!gpsResuelto) {
+                        gpsResuelto = true
+
+                        fusedLocationClient.lastLocation.addOnSuccessListener { lastLoc ->
+                            if (lastLoc != null) {
+                                latitudCaptura = lastLoc.latitude.toString()
+                                longitudCaptura = lastLoc.longitude.toString()
+                                precisionCaptura = lastLoc.accuracy.toString()
+                            } else {
+                                latitudCaptura = "0.0"; longitudCaptura = "0.0"; precisionCaptura = "0.0"
+                            }
+                            isGpsCargando = false
+                        }.addOnFailureListener {
+                            latitudCaptura = "0.0"; longitudCaptura = "0.0"; precisionCaptura = "0.0"
+                            isGpsCargando = false
+                        }
+                    }
+                }
+
             } else {
                 latitudCaptura = "0.0"; longitudCaptura = "0.0"; precisionCaptura = "0.0"
                 isGpsCargando = false
@@ -213,7 +280,6 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
     Surface(modifier = Modifier.fillMaxSize(), color = GrisFondoApp) {
         Column(modifier = Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
 
-            // CABECERA PREMIUM (Shadow y bordes curvos profundos)
             Surface(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(bottomStart = 36.dp, bottomEnd = 36.dp),
@@ -237,7 +303,6 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
                 }
             }
 
-            //CONTENEDOR MAESTRO (Para no estirarse en Tablets)
             Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
 
                 if (isLoadingDetalle && lugaresVisita.isEmpty()) {
@@ -257,40 +322,20 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
                         item {
                             Column(modifier = Modifier.fillMaxWidth()) {
                                 AnimatedVisibility(visible = !isOnline) {
-                                    Surface(
-                                        color = Color(0xFFFFEBEE),
-                                        shape = RoundedCornerShape(16.dp),
-                                        modifier = Modifier.fillMaxWidth().padding(bottom = 20.dp)
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.padding(16.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.Center
-                                        ) {
+                                    Surface(color = Color(0xFFFFEBEE), shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth().padding(bottom = 20.dp)) {
+                                        Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
                                             Icon(Icons.Filled.CloudOff, contentDescription = null, tint = Color(0xFFD32F2F), modifier = Modifier.size(24.dp))
                                             Spacer(modifier = Modifier.width(12.dp))
-                                            Text(
-                                                text = "MODO OFFLINE ACTIVADO",
-                                                color = Color(0xFFD32F2F),
-                                                fontWeight = FontWeight.ExtraBold,
-                                                fontSize = 14.sp,
-                                                letterSpacing = 0.5.sp
-                                            )
+                                            Text(text = "MODO OFFLINE ACTIVADO", color = Color(0xFFD32F2F), fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, letterSpacing = 0.5.sp)
                                         }
                                     }
                                 }
                             }
                         }
 
-                        //ALERTA DE SEGURIDAD
                         item {
                             if (!isSystemReady) {
-                                ElevatedCard(
-                                    modifier = Modifier.fillMaxWidth().padding(bottom = 20.dp),
-                                    shape = RoundedCornerShape(16.dp),
-                                    colors = CardDefaults.elevatedCardColors(containerColor = Color(0xFFFFEBEE)),
-                                    elevation = CardDefaults.elevatedCardElevation(defaultElevation = 0.dp)
-                                ) {
+                                ElevatedCard(modifier = Modifier.fillMaxWidth().padding(bottom = 20.dp), shape = RoundedCornerShape(16.dp), colors = CardDefaults.elevatedCardColors(containerColor = Color(0xFFFFEBEE)), elevation = CardDefaults.elevatedCardElevation(defaultElevation = 0.dp)) {
                                     Column(modifier = Modifier.padding(20.dp)) {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
                                             Icon(Icons.Filled.Warning, null, tint = Color(0xFFD32F2F))
@@ -300,20 +345,16 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
                                         Spacer(modifier = Modifier.height(12.dp))
                                         if (isAirplaneModeOn) {
                                             Text("El Modo Avión está activado. Cámara bloqueada.", color = Color.DarkGray, fontSize = 13.sp)
-                                            TextButton(onClick = { context.startActivity(Intent(Settings.ACTION_AIRPLANE_MODE_SETTINGS)) }) { Text("APAGAR MODO AVIÓN", color = AzulPrincipal, fontWeight = FontWeight.Bold) }
                                         } else if (!isAutoTimeEnabled) {
                                             Text("La Hora Automática está apagada. Cámara bloqueada.", color = Color.DarkGray, fontSize = 13.sp)
-                                            TextButton(onClick = { context.startActivity(Intent(Settings.ACTION_DATE_SETTINGS)) }) { Text("ARREGLAR HORA", color = AzulPrincipal, fontWeight = FontWeight.Bold) }
                                         } else if (!isGpsEnabled) {
                                             Text("El GPS está apagado. Cámara bloqueada.", color = Color.DarkGray, fontSize = 13.sp)
-                                            TextButton(onClick = { context.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)) }) { Text("ENCENDER GPS", color = AzulPrincipal, fontWeight = FontWeight.Bold) }
                                         }
                                     }
                                 }
                             }
                         }
 
-                        //ITEMS DEL ACORDEÓN
                         items(lugaresVisita) { lugar ->
                             DiaAccordionItem(
                                 lugar = lugar,
@@ -334,6 +375,7 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
                                 latitudCaptura = latitudCaptura,
                                 longitudCaptura = longitudCaptura,
                                 isOnline = isOnline,
+                                refreshTrigger = refreshTrigger,
                                 onTomarFoto = { etapa ->
                                     previewLugarId = lugar.id
                                     previewEtapa = etapa
@@ -356,31 +398,30 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
                                             val latUsuario = latitudCaptura.toDoubleOrNull()
                                             val lonUsuario = longitudCaptura.toDoubleOrNull()
 
-                                            val estadoRed = if (isOnline) "ONLINE (Con señal)" else "OFFLINE (Sin o baja señal)"
+                                            val estadoRed = if (isOnline) "ONLINE" else "OFFLINE"
                                             var observacionFinal = ""
 
                                             if (latDestino != null && lonDestino != null && latUsuario != null && lonUsuario != null && latUsuario != 0.0) {
                                                 val results = FloatArray(1)
                                                 Location.distanceBetween(latDestino, lonDestino, latUsuario, lonUsuario, results)
                                                 val distanciaMetros = results[0].toInt()
-
-                                                val textoDistancia = if (distanciaMetros <= 300) {
-                                                    "Dentro del radio ($distanciaMetros m del punto)"
-                                                } else {
-                                                    "Fuera del radio ($distanciaMetros m del punto)"
-                                                }
-                                                observacionFinal = "Estado Red: $estadoRed | Ubicación: $textoDistancia"
+                                                val textoDistancia = if (distanciaMetros <= 300) "Dentro del radio ($distanciaMetros m)" else "Fuera del radio ($distanciaMetros m)"
+                                                observacionFinal = "Red: $estadoRed | $textoDistancia"
                                             } else {
-                                                observacionFinal = "Estado Red: $estadoRed | Ubicación: Distancia desconocida (Faltan coordenadas)"
+                                                observacionFinal = "Red: $estadoRed | Distancia desconocida"
                                             }
 
                                             val nombreArchivo = "visita_${idVisita}_dia_${lugar.id}_${etapa.lowercase()}.jpg"
                                             val fileFoto = bitmapToFile(context, bitmapPreview!!, nombreArchivo)
 
+                                            val estadoVisitaReal = if (etapa.uppercase(Locale.ROOT) == "SALIDA") "CULMINADO" else "PROCESO"
+
                                             if (isOnline) {
                                                 val response = RetrofitClient.apiService.guardarVisita(
                                                     token = "Bearer $tokenGuardado",
                                                     planId = idVisita.toRequestBody("text/plain".toMediaTypeOrNull()),
+                                                    lugaresVisitasId = lugar.id.toString().toRequestBody("text/plain".toMediaTypeOrNull()),
+                                                    estadoVisita = estadoVisitaReal.toRequestBody("text/plain".toMediaTypeOrNull()),
                                                     usuarioId = nicknameUsuario.toRequestBody("text/plain".toMediaTypeOrNull()),
                                                     estado = etapa.toRequestBody("text/plain".toMediaTypeOrNull()),
                                                     fecha = fechaCaptura.toRequestBody("text/plain".toMediaTypeOrNull()),
@@ -402,17 +443,26 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
                                                 mensajeExitoDialog = "La evidencia de $etapa se subió correctamente."
                                             } else {
                                                 val nuevaEvidenciaOffline = VisitaEvidenciaEntity(
-                                                    planId = idVisita, usuarioId = nicknameUsuario, estado = etapa,
-                                                    fecha = fechaCaptura, hora = horaCaptura, anio = anioCaptura, mes = mesCaptura,
-                                                    numeroMes = numeroMesCaptura, latitud = latitudCaptura, longitud = longitudCaptura,
-                                                    precisionGps = precisionCaptura, observacion = observacionFinal,
+                                                    planId = idVisita,
+                                                    lugaresVisitasId = lugar.id.toString(),
+                                                    estadoVisita = estadoVisitaReal,
+                                                    usuarioId = nicknameUsuario,
+                                                    estado = etapa,
+                                                    fecha = fechaCaptura,
+                                                    hora = horaCaptura,
+                                                    anio = anioCaptura,
+                                                    mes = mesCaptura,
+                                                    numeroMes = numeroMesCaptura,
+                                                    latitud = latitudCaptura,
+                                                    longitud = longitudCaptura,
+                                                    precisionGps = precisionCaptura,
+                                                    observacion = observacionFinal,
                                                     rutaFotoLocal = fileFoto.absolutePath
                                                 )
                                                 visitaDao.insertarEvidencia(nuevaEvidenciaOffline)
                                                 mensajeExitoDialog = "Modo Offline. Evidencia guardada en el dispositivo de forma segura."
                                             }
 
-                                            // Sincronización global
                                             val sharedPref = context.getSharedPreferences("EstadoVisitas", Context.MODE_PRIVATE)
                                             val nuevoEstadoGlobal = if (etapa == "SALIDA") "COMPLETADO" else etapa
 
@@ -423,6 +473,7 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
                                                 .apply()
 
                                             bitmapPreview = null
+                                            refreshTrigger++
                                             mostrarExitoDialog = true
 
                                         } catch (e: Exception) {
@@ -440,7 +491,6 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
             }
         }
 
-        // DIÁLOGOS
         if (mostrarExitoDialog) {
             AlertDialog(
                 onDismissRequest = { },
@@ -453,7 +503,10 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
                 },
                 text = { Text(mensajeExitoDialog, color = GrisTexto, fontSize = 15.sp) },
                 confirmButton = {
-                    Button(onClick = { mostrarExitoDialog = false }, colors = ButtonDefaults.buttonColors(containerColor = AzulPrincipal), shape = RoundedCornerShape(12.dp)) {
+                    Button(onClick = {
+                        mostrarExitoDialog = false
+                        cargarDetalle() // Recargar datos
+                    }, colors = ButtonDefaults.buttonColors(containerColor = AzulPrincipal), shape = RoundedCornerShape(12.dp)) {
                         Text("CONTINUAR", color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 8.dp))
                     }
                 },
@@ -488,13 +541,25 @@ fun DiaAccordionItem(
     isSystemReady: Boolean, context: Context,
     bitmapPreview: Bitmap?, previewEtapa: String, fechaCaptura: String, horaCaptura: String,
     isUploading: Boolean, isGpsCargando: Boolean, latitudCaptura: String, longitudCaptura: String, isOnline: Boolean,
+    refreshTrigger: Int,
     onTomarFoto: (String) -> Unit, onGuardar: (String) -> Unit
 ) {
     val sharedPref = context.getSharedPreferences("EstadoVisitas", Context.MODE_PRIVATE)
 
-    val entradaGuardada = sharedPref.getBoolean("visita_${idVisita}_lugar_${lugar.id}_ENTRADA", false)
-    val medioGuardado = sharedPref.getBoolean("visita_${idVisita}_lugar_${lugar.id}_MEDIO", false)
-    val salidaGuardada = sharedPref.getBoolean("visita_${idVisita}_lugar_${lugar.id}_SALIDA", false)
+    remember(refreshTrigger) { refreshTrigger }
+
+    val estadoBackend = lugar.estado?.uppercase(Locale.ROOT) ?: "PENDIENTE"
+
+    val pesoBackend = when(estadoBackend) {
+        "COMPLETADO", "SALIDA", "CULMINADO", "FINALIZÓ", "CULMINO" -> 3
+        "MEDIO" -> 2
+        "ENTRADA", "PROGRESO", "PROCESO" -> 1
+        else -> 0
+    }
+
+    val entradaGuardada = sharedPref.getBoolean("visita_${idVisita}_lugar_${lugar.id}_ENTRADA", false) || pesoBackend >= 1
+    val medioGuardado = sharedPref.getBoolean("visita_${idVisita}_lugar_${lugar.id}_MEDIO", false) || pesoBackend >= 2
+    val salidaGuardada = sharedPref.getBoolean("visita_${idVisita}_lugar_${lugar.id}_SALIDA", false) || pesoBackend >= 3
 
     val horaEntrada = sharedPref.getString("visita_${idVisita}_lugar_${lugar.id}_ENTRADA_hora", "") ?: ""
     val horaMedio = sharedPref.getString("visita_${idVisita}_lugar_${lugar.id}_MEDIO_hora", "") ?: ""
@@ -509,11 +574,31 @@ fun DiaAccordionItem(
 
     val fechaStatus = getFechaStatus(lugar.fecha)
     val isDateValid = fechaStatus == "HOY"
+
+    val visitaStatusText: String
+    val visitaStatusColor: Color
+
+    if (etapaActiva == "COMPLETADO" && estadoBackend != "NO CULMINADO") {
+        visitaStatusText = "CULMINADO"
+        visitaStatusColor = Color(0xFF2E7D32)
+    } else {
+        if (fechaStatus == "PASADA" || estadoBackend == "NO CULMINADO") {
+            visitaStatusText = "NO CULMINADO"
+            visitaStatusColor = Color(0xFFD32F2F)
+        } else if (entradaGuardada || medioGuardado || salidaGuardada) {
+            visitaStatusText = "PROCESO"
+            visitaStatusColor = Color(0xFFF57C00)
+        } else {
+            visitaStatusText = "PENDIENTE"
+            visitaStatusColor = AzulPrincipal
+        }
+    }
+
     val iconRotation by animateFloatAsState(targetValue = if (isExpanded) 180f else 0f)
 
     ElevatedCard(
-        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)), // Bordes más curvos
-        colors = CardDefaults.elevatedCardColors(containerColor = if (etapaActiva == "COMPLETADO") Color(0xFFF1F8E9) else Color.White),
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)),
+        colors = CardDefaults.elevatedCardColors(containerColor = if (etapaActiva == "COMPLETADO" && estadoBackend != "NO CULMINADO") Color(0xFFF1F8E9) else Color.White),
         elevation = CardDefaults.elevatedCardElevation(defaultElevation = 6.dp)
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
@@ -521,37 +606,68 @@ fun DiaAccordionItem(
                 modifier = Modifier.fillMaxWidth().clickable { onToggleExpand() }.padding(20.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Box(modifier = Modifier.size(48.dp).background(if (etapaActiva == "COMPLETADO") Color(0xFF4CAF50) else AzulPrincipal.copy(alpha=0.1f), CircleShape), contentAlignment = Alignment.Center) {
-                    if (etapaActiva == "COMPLETADO") Icon(Icons.Filled.Check, null, tint = Color.White, modifier = Modifier.size(24.dp))
+                Box(modifier = Modifier.size(48.dp).background(if (etapaActiva == "COMPLETADO" && estadoBackend != "NO CULMINADO") Color(0xFF4CAF50) else AzulPrincipal.copy(alpha=0.1f), CircleShape), contentAlignment = Alignment.Center) {
+                    if (etapaActiva == "COMPLETADO" && estadoBackend != "NO CULMINADO") Icon(Icons.Filled.Check, null, tint = Color.White, modifier = Modifier.size(24.dp))
                     else Icon(Icons.Filled.DateRange, null, tint = AzulPrincipal, modifier = Modifier.size(24.dp))
                 }
                 Spacer(modifier = Modifier.width(16.dp))
                 Column(modifier = Modifier.weight(1f)) {
+                    Surface(color = visitaStatusColor.copy(alpha = 0.12f), shape = RoundedCornerShape(8.dp)) {
+                        Text(
+                            text = visitaStatusText,
+                            color = visitaStatusColor,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            letterSpacing = 0.5.sp
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
                     Text("Fecha: ${lugar.fecha}", fontWeight = FontWeight.ExtraBold, fontSize = 17.sp, color = AsideFondo, letterSpacing = (-0.2).sp)
                     Spacer(modifier = Modifier.height(4.dp))
-                    Text(lugar.lugares, color = GrisTexto, fontSize = 13.sp, maxLines = 1, lineHeight = 18.sp)
+                    Text(lugar.lugares, color = AsideFondo, fontSize = 14.sp, fontWeight = FontWeight.Bold, lineHeight = 18.sp)
+
+                    if (!lugar.lugar_gps.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(lugar.lugar_gps, color = GrisTexto, fontSize = 13.sp, lineHeight = 16.sp)
+                    }
                 }
+
+                FilledTonalIconButton(
+                    onClick = { abrirGoogleMaps(context, lugar.latitud, lugar.longitud, lugar.lugares) },
+                    modifier = Modifier.size(40.dp),
+                    shape = CircleShape,
+                    colors = IconButtonDefaults.filledTonalIconButtonColors(
+                        containerColor = AzulPrincipal.copy(alpha = 0.1f),
+                        contentColor = AzulPrincipal
+                    )
+                ) {
+                    Icon(imageVector = Icons.Rounded.Map, contentDescription = "Ver Mapa", modifier = Modifier.size(20.dp))
+                }
+
+                Spacer(modifier = Modifier.width(8.dp))
                 Icon(Icons.Filled.KeyboardArrowDown, null, tint = GrisTexto, modifier = Modifier.rotate(iconRotation).size(28.dp))
             }
 
             AnimatedVisibility(visible = isExpanded) {
                 Column(modifier = Modifier.fillMaxWidth().background(Color(0xFFFAFAFA)).padding(20.dp)) {
-                    if (etapaActiva == "COMPLETADO") {
+                    if (etapaActiva == "COMPLETADO" && estadoBackend != "NO CULMINADO") {
                         Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(Icons.Filled.Star, contentDescription = null, tint = Color(0xFFF57C00), modifier = Modifier.size(22.dp))
                                 Spacer(modifier = Modifier.width(10.dp))
-                                Text("Evidencias Completadas", color = Color(0xFF2E7D32), fontWeight = FontWeight.ExtraBold, fontSize = 16.sp)
+                                Text("Evidencias Finalizadas", color = Color(0xFF2E7D32), fontWeight = FontWeight.ExtraBold, fontSize = 16.sp)
                             }
                             Spacer(modifier = Modifier.height(20.dp))
-                            CapturedPhotoItem("ENTRADA", horaEntrada, idVisita, lugar.id, context)
-                            CapturedPhotoItem("MEDIO", horaMedio, idVisita, lugar.id, context)
-                            CapturedPhotoItem("SALIDA", horaSalida, idVisita, lugar.id, context)
+                            CapturedPhotoItem("ENTRADA", horaEntrada, idVisita, lugar.id, context, refreshTrigger)
+                            CapturedPhotoItem("MEDIO", horaMedio, idVisita, lugar.id, context, refreshTrigger)
+                            CapturedPhotoItem("SALIDA", horaSalida, idVisita, lugar.id, context, refreshTrigger)
                         }
                     } else {
-                        TimelineNode("1. ENTRADA", entradaGuardada, etapaActiva == "ENTRADA", isSystemReady, isDateValid, fechaStatus, isUploading, isGpsCargando, latitudCaptura, longitudCaptura, if (previewEtapa == "ENTRADA") bitmapPreview else null, fechaCaptura, horaCaptura, horaEntrada, { onTomarFoto("ENTRADA") }, { onGuardar("ENTRADA") }, false)
-                        TimelineNode("2. MEDIO", medioGuardado, etapaActiva == "MEDIO", isSystemReady, isDateValid, fechaStatus, isUploading, isGpsCargando, latitudCaptura, longitudCaptura, if (previewEtapa == "MEDIO") bitmapPreview else null, fechaCaptura, horaCaptura, horaMedio, { onTomarFoto("MEDIO") }, { onGuardar("MEDIO") }, false)
-                        TimelineNode("3. SALIDA", salidaGuardada, etapaActiva == "SALIDA", isSystemReady, isDateValid, fechaStatus, isUploading, isGpsCargando, latitudCaptura, longitudCaptura, if (previewEtapa == "SALIDA") bitmapPreview else null, fechaCaptura, horaCaptura, horaSalida, { onTomarFoto("SALIDA") }, { onGuardar("SALIDA") }, true)
+                        // AQUÍ PASAMOS EL estadoBackend AL NODO DE LA LÍNEA DE TIEMPO
+                        TimelineNode("1. ENTRADA", entradaGuardada, etapaActiva == "ENTRADA", isSystemReady, isDateValid, fechaStatus, estadoBackend, isUploading, isGpsCargando, latitudCaptura, longitudCaptura, if (previewEtapa == "ENTRADA") bitmapPreview else null, fechaCaptura, horaCaptura, horaEntrada, { onTomarFoto("ENTRADA") }, { onGuardar("ENTRADA") }, false)
+                        TimelineNode("2. MEDIO", medioGuardado, etapaActiva == "MEDIO", isSystemReady, isDateValid, fechaStatus, estadoBackend, isUploading, isGpsCargando, latitudCaptura, longitudCaptura, if (previewEtapa == "MEDIO") bitmapPreview else null, fechaCaptura, horaCaptura, horaMedio, { onTomarFoto("MEDIO") }, { onGuardar("MEDIO") }, false)
+                        TimelineNode("3. SALIDA", salidaGuardada, etapaActiva == "SALIDA", isSystemReady, isDateValid, fechaStatus, estadoBackend, isUploading, isGpsCargando, latitudCaptura, longitudCaptura, if (previewEtapa == "SALIDA") bitmapPreview else null, fechaCaptura, horaCaptura, horaSalida, { onTomarFoto("SALIDA") }, { onGuardar("SALIDA") }, true)
                     }
                 }
             }
@@ -560,12 +676,11 @@ fun DiaAccordionItem(
 }
 
 @Composable
-fun CapturedPhotoItem(etapa: String, hora: String, idVisita: String, idLugar: Int, context: Context) {
-    // Usamos un estado para el bitmap para que la UI no se congele esperando
+fun CapturedPhotoItem(etapa: String, hora: String, idVisita: String, idLugar: Int, context: Context, refreshTrigger: Int) {
     var bitmap by remember { mutableStateOf<Bitmap?>(null) }
 
-    LaunchedEffect(idVisita, idLugar, etapa) {
-        bitmap = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+    LaunchedEffect(idVisita, idLugar, etapa, refreshTrigger) {
+        bitmap = withContext(Dispatchers.IO) {
             getSavedBitmap(context, idVisita, idLugar, etapa)
         }
     }
@@ -585,8 +700,9 @@ fun CapturedPhotoItem(etapa: String, hora: String, idVisita: String, idLugar: In
                     contentScale = ContentScale.Crop
                 )
             } else {
-                Box(modifier = Modifier.size(64.dp).background(Color(0xFFEEEEEE), RoundedCornerShape(8.dp)), contentAlignment = Alignment.Center) {
-                    Icon(Icons.Filled.ImageNotSupported, contentDescription = null, tint = Color.Gray)
+                // CORRECCIÓN VISUAL: Ícono exitoso de Nube si la foto ya se envió al servidor y no está local.
+                Box(modifier = Modifier.size(64.dp).background(Color(0xFFE8F5E9), RoundedCornerShape(8.dp)), contentAlignment = Alignment.Center) {
+                    Icon(Icons.Filled.CloudDone, contentDescription = "Sincronizado", tint = Color(0xFF4CAF50), modifier = Modifier.size(28.dp))
                 }
             }
             Spacer(modifier = Modifier.width(16.dp))
@@ -596,7 +712,7 @@ fun CapturedPhotoItem(etapa: String, hora: String, idVisita: String, idLugar: In
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Filled.AccessTime, contentDescription = null, modifier = Modifier.size(14.dp), tint = GrisTexto)
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text(text = hora.ifEmpty { "Hora no registrada" }, fontSize = 13.sp, color = GrisTexto, fontWeight = FontWeight.Medium)
+                    Text(text = hora.ifEmpty { "Sincronizado" }, fontSize = 13.sp, color = GrisTexto, fontWeight = FontWeight.Medium)
                 }
             }
         }
@@ -604,41 +720,41 @@ fun CapturedPhotoItem(etapa: String, hora: String, idVisita: String, idLugar: In
 }
 
 @Composable
-fun TimelineNode(
-    titulo: String, isGuardado: Boolean, isActive: Boolean, isSystemReady: Boolean, isDateValid: Boolean, fechaStatus: String,
-    isUploading: Boolean, isGpsCargando: Boolean, latitudCaptura: String, longitudCaptura: String,
-    bitmapActual: Bitmap?, fechaCaptura: String, horaCaptura: String, horaGuardada: String,
-    onTomarFoto: () -> Unit, onGuardar: () -> Unit, isLast: Boolean
-) {
+fun TimelineNode(titulo: String, isGuardado: Boolean, isActive: Boolean, isSystemReady: Boolean, isDateValid: Boolean, fechaStatus: String, estadoBackend: String, isUploading: Boolean, isGpsCargando: Boolean, latitudCaptura: String, longitudCaptura: String, bitmapActual: Bitmap?, fechaCaptura: String, horaCaptura: String, horaGuardada: String, onTomarFoto: () -> Unit, onGuardar: () -> Unit, isLast: Boolean) {
+    val isCaducado = fechaStatus == "PASADA" || estadoBackend == "NO CULMINADO"
+
     Row(modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.width(36.dp)) {
-            val colorCirculo = if (isGuardado) Color(0xFF4CAF50) else if (isActive) AzulPrincipal else Color.LightGray
+            val colorCirculo = if (isGuardado) Color(0xFF4CAF50) else if (isActive && !isCaducado) AzulPrincipal else if (isCaducado && !isGuardado) Color(0xFFD32F2F).copy(alpha = 0.2f) else Color.LightGray
+
             Box(modifier = Modifier.size(24.dp).background(colorCirculo, CircleShape).border(3.dp, Color.White, CircleShape)) {
                 if (isGuardado) Icon(Icons.Filled.Check, null, tint = Color.White, modifier = Modifier.size(16.dp).align(Alignment.Center))
+                else if (isCaducado && !isGuardado) Icon(Icons.Filled.Close, null, tint = Color(0xFFD32F2F), modifier = Modifier.size(14.dp).align(Alignment.Center))
             }
             if (!isLast) {
-                Box(modifier = Modifier.weight(1f).width(2.5.dp).background(if (isGuardado) Color(0xFF4CAF50).copy(alpha = 0.5f) else Color.LightGray.copy(alpha = 0.5f)))
+                val colorLinea = if (isGuardado) Color(0xFF4CAF50).copy(alpha = 0.5f) else if (isCaducado && !isGuardado) Color(0xFFD32F2F).copy(alpha = 0.2f) else Color.LightGray.copy(alpha = 0.5f)
+                Box(modifier = Modifier.weight(1f).width(2.5.dp).background(colorLinea))
             }
         }
 
-        val cardAlpha = if (isGuardado || isActive) 1f else 0.5f
+        val cardAlpha = if (isGuardado || (isActive && !isCaducado)) 1f else 0.5f
 
         ElevatedCard(
             modifier = Modifier.fillMaxWidth().padding(bottom = 20.dp, start = 12.dp),
             shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.elevatedCardColors(containerColor = if(isActive) Color.White else if(isGuardado) Color(0xFFFAFAFA) else Color.Transparent),
-            elevation = CardDefaults.elevatedCardElevation(defaultElevation = if(isActive) 6.dp else 0.dp)
+            colors = CardDefaults.elevatedCardColors(containerColor = if(isActive && !isCaducado) Color.White else if(isGuardado) Color(0xFFFAFAFA) else Color.Transparent),
+            elevation = CardDefaults.elevatedCardElevation(defaultElevation = if(isActive && !isCaducado) 6.dp else 0.dp)
         ) {
             Column(modifier = Modifier.padding(16.dp).alpha(cardAlpha)) {
                 Text(text = titulo, fontWeight = FontWeight.ExtraBold, fontSize = 15.sp, color = if (isGuardado) Color(0xFF2E7D32) else AsideFondo)
                 Spacer(modifier = Modifier.height(10.dp))
 
-                if (isActive) {
+                if (isActive && !isCaducado) {
                     if (!isDateValid) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Filled.Block, null, tint = Color.Red, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text(if (fechaStatus == "PASADA") "Fecha culminada. Registro cerrado." else "Aún no es la fecha programada.", color = Color.Red, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                            Text("Aún no es la fecha programada.", color = Color.Red, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                         }
                     } else if (isUploading) {
                         Box(modifier = Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
@@ -686,16 +802,24 @@ fun TimelineNode(
                         }
                     }
                 } else if (!isGuardado) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Filled.Lock, null, tint = Color.LightGray, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Bloqueado", color = Color.Gray, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                    if (isCaducado) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Filled.Cancel, null, tint = Color(0xFFD32F2F), modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Registro omitido", color = Color(0xFFD32F2F), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    } else {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Filled.Lock, null, tint = Color.LightGray, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Bloqueado", color = Color.Gray, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                        }
                     }
                 } else {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Filled.Check, null, tint = Color(0xFF2E7D32), modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Guardado a las $horaGuardada", color = Color(0xFF2E7D32), fontSize = 12.sp, fontWeight = FontWeight.ExtraBold)
+                        Text(if(horaGuardada.isNotEmpty()) "Guardado a las $horaGuardada" else "Completado en servidor", color = Color(0xFF2E7D32), fontSize = 12.sp, fontWeight = FontWeight.ExtraBold)
                     }
                 }
             }
@@ -703,19 +827,32 @@ fun TimelineNode(
     }
 }
 
+fun abrirGoogleMaps(context: Context, latitud: String?, longitud: String?, titulo: String) {
+    if (latitud.isNullOrBlank() || longitud.isNullOrBlank() || latitud == "0.0" || latitud == "null") {
+        Toast.makeText(context, "Este lugar aún no tiene coordenadas GPS registradas.", Toast.LENGTH_LONG).show()
+        return
+    }
+
+    try {
+        val gmmIntentUri = Uri.parse("geo:$latitud,$longitud?q=$latitud,$longitud(${Uri.encode(titulo)})")
+        val mapIntent = Intent(Intent.ACTION_VIEW, gmmIntentUri)
+        mapIntent.setPackage("com.google.android.apps.maps")
+        context.startActivity(mapIntent)
+    } catch (e: Exception) {
+        val webUri = Uri.parse("https://www.google.com/maps/search/?api=1&query=$latitud,$longitud")
+        val webIntent = Intent(Intent.ACTION_VIEW, webUri)
+        context.startActivity(webIntent)
+    }
+}
+
 fun getSavedBitmap(context: Context, idVisita: String, idLugar: Int, etapa: String): Bitmap? {
     val fileName = "visita_${idVisita}_dia_${idLugar}_${etapa.lowercase()}.jpg"
     val file = File(context.filesDir, fileName)
-
     if (!file.exists()) return null
-
-    // Le decimos a Android que reduzca la calidad al leer la imagen porque solo es para una miniatura
-    val options = BitmapFactory.Options().apply {
-        inSampleSize = 8 // Reduce el peso de la imagen a 1/64 en memoria RAM
-    }
-
+    val options = BitmapFactory.Options().apply { inSampleSize = 8 }
     return BitmapFactory.decodeFile(file.absolutePath, options)
 }
+
 fun bitmapToFile(context: Context, bitmap: Bitmap, fileName: String): File {
     val file = File(context.filesDir, fileName)
     file.createNewFile()

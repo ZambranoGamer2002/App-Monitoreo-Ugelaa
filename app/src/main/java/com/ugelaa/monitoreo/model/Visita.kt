@@ -13,5 +13,6 @@ data class Visita(
     val fecha_fin: String?,
     val observacion: String?,
     val latitud: String? = null,
-    val longitud: String? = null
+    val longitud: String? = null,
+    val estado: String? = null
 )

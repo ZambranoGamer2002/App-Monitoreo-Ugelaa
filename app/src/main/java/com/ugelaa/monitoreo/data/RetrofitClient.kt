@@ -18,6 +18,8 @@ import retrofit2.http.POST
 import retrofit2.http.Part
 import retrofit2.http.Query
 import retrofit2.http.Path
+import retrofit2.http.FormUrlEncoded
+import retrofit2.http.Field
 
 interface ApiService {
 
@@ -35,12 +37,14 @@ interface ApiService {
         @Header("Authorization") token: String
     ): Response<List<LugarVisita>>
 
-    // 3. GUARDAR EVIDENCIA
+    // GUARDAR EVIDENCIA
     @Multipart
     @POST("api/movil/guardarVisitas")
     suspend fun guardarVisita(
         @Header("Authorization") token: String,
         @Part("plan_id") planId: RequestBody,
+        @Part("lugares_visitas_id") lugaresVisitasId: RequestBody,
+        @Part("estado_visita") estadoVisita: RequestBody,
         @Part("usuario_id") usuarioId: RequestBody,
         @Part("estado") estado: RequestBody,
         @Part("fecha") fecha: RequestBody,
@@ -53,6 +57,22 @@ interface ApiService {
         @Part("precision_gps") precisionGps: RequestBody,
         @Part("observacion") observacion: RequestBody,
         @Part foto: MultipartBody.Part
+    ): Response<Any>
+
+    // MARCAR PLANES PADRE VENCIDOS
+    @FormUrlEncoded
+    @POST("api/movil/marcarVencidos")
+    suspend fun marcarVisitasVencidas(
+        @Header("Authorization") token: String,
+        @Field("planes_vencidos[]") planesVencidos: List<Int>
+    ): Response<Any>
+
+    // MARCAR LUGARES HIJOS VENCIDOS
+    @FormUrlEncoded
+    @POST("api/movil/marcarLugaresVencidos")
+    suspend fun marcarLugaresVencidos(
+        @Header("Authorization") token: String,
+        @Field("lugares_vencidos[]") lugaresVencidos: List<Int>
     ): Response<Any>
 
     @GET("api/movil/actualizaciones")
