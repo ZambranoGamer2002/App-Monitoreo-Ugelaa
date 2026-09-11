@@ -57,6 +57,7 @@ class SyncWorker(
                     longitud = evidencia.longitud.toRequestBody("text/plain".toMediaTypeOrNull()),
                     precisionGps = evidencia.precisionGps.toRequestBody("text/plain".toMediaTypeOrNull()),
                     observacion = evidencia.observacion.toRequestBody("text/plain".toMediaTypeOrNull()),
+                    observacionVisita = evidencia.observacion.toRequestBody("text/plain".toMediaTypeOrNull()),
                     foto = MultipartBody.Part.createFormData("foto", file.name, file.asRequestBody("image/jpeg".toMediaTypeOrNull()))
                 )
 

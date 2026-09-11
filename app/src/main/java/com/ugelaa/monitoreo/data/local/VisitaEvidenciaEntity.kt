@@ -20,5 +20,6 @@ data class VisitaEvidenciaEntity(
     val longitud: String,
     val precisionGps: String,
     val observacion: String,
+    val observacionVisita: String,
     val rutaFotoLocal: String
 )

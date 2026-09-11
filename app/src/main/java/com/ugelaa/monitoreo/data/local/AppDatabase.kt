@@ -5,7 +5,7 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 
-@Database(entities = [VisitaEvidenciaEntity::class], version = 3, exportSchema = false)
+@Database(entities = [VisitaEvidenciaEntity::class], version = 4, exportSchema = false) //ACTUALIZAR CADA QUE DA ERROR (NUMERO) + 1
 abstract class AppDatabase : RoomDatabase() {
 
     abstract fun visitaDao(): VisitaDao

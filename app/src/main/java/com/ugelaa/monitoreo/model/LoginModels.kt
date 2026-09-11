@@ -19,3 +19,17 @@ data class Usuario(
     val nombre_completo: String,
     val nickname: String
 )
+
+data class PerfilResponse(
+    val success: Boolean,
+    val usuario: PerfilUsuario?
+)
+
+data class PerfilUsuario(
+    val id: Int?,
+    val dni: String?,
+    val nombre_completo: String?,
+    val nickname: String?,
+    val cargo: String?,
+    val oficina: String?
+)

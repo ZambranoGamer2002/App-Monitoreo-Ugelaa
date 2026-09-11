@@ -37,6 +37,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -98,6 +99,7 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
     val tokenGuardado by sessionManager.getToken.collectAsState(initial = "")
 
     val sharedPrefCache = context.getSharedPreferences("CacheVisitas", Context.MODE_PRIVATE)
+    val sharedPrefEstados = context.getSharedPreferences("EstadoVisitas", Context.MODE_PRIVATE)
     var lugaresVisita by remember { mutableStateOf<List<LugarVisita>>(emptyList()) }
     var errorDetalle by remember { mutableStateOf("") }
 
@@ -130,6 +132,38 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
 
     val isSystemReady = isGpsEnabled && isAutoTimeEnabled && !isAirplaneModeOn
 
+    var showSecurityDialog by remember { mutableStateOf(false) }
+    var securityDialogTitle by remember { mutableStateOf("") }
+    var securityDialogMessage by remember { mutableStateOf("") }
+    var securityDialogButtonText by remember { mutableStateOf("") }
+    var securityDialogIcon by remember { mutableStateOf(Icons.Filled.Warning) }
+    var securityDialogAction by remember { mutableStateOf<() -> Unit>({}) }
+
+    fun evaluarYSincronizarPlanPadre(lista: List<LugarVisita>) {
+        if (lista.isEmpty()) return
+
+        val todosTerminados = lista.all { lugar ->
+            val salidaHecha = sharedPrefEstados.getBoolean("visita_${idVisita}_lugar_${lugar.id}_SALIDA", false)
+            val estadoBd = lugar.estado?.uppercase(Locale.ROOT) ?: ""
+            salidaHecha || estadoBd == "CULMINADO" || estadoBd == "COMPLETADO"
+        }
+
+        val nuevoEstadoLocal = if (todosTerminados) "FINALIZADA" else "PENDIENTE"
+        sharedPrefEstados.edit().putString("visita_$idVisita", nuevoEstadoLocal).apply()
+
+        if (isOnline && tokenGuardado.isNotEmpty()) {
+            coroutineScope.launch(Dispatchers.IO) {
+                try {
+                    idVisita.toIntOrNull()?.let { planIdInt ->
+                        RetrofitClient.apiService.planFinalizado("Bearer $tokenGuardado", planIdInt)
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        }
+    }
+
     val cargarDetalle = {
         coroutineScope.launch {
             if (tokenGuardado.isNotEmpty()) {
@@ -153,7 +187,6 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
                         if (lugaresVencidos.isNotEmpty()) {
                             try {
                                 RetrofitClient.apiService.marcarLugaresVencidos("Bearer $tokenGuardado", lugaresVencidos)
-                                // Actualizamos la lista local en caliente
                                 val listaActualizada = listaApi.map { lugar ->
                                     if (lugaresVencidos.contains(lugar.id)) lugar.copy(estado = "NO CULMINADO") else lugar
                                 }
@@ -166,9 +199,10 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
                         }
 
                         sharedPrefCache.edit().putString("detalle_${idVisita}", gson.toJson(lugaresVisita)).apply()
+                        evaluarYSincronizarPlanPadre(lugaresVisita)
                     }
                 } catch (e: Exception) {
-                    if (lugaresVisita.isEmpty()) errorDetalle = "Sin internet. Mostrando vista local si existe."
+                    if (lugaresVisita.isEmpty()) errorDetalle = "Sin conexión. Mostrando vista local si existe."
                 } finally {
                     isLoadingDetalle = false
                 }
@@ -244,7 +278,6 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
                     kotlinx.coroutines.delay(7000L)
                     if (!gpsResuelto) {
                         gpsResuelto = true
-
                         fusedLocationClient.lastLocation.addOnSuccessListener { lastLoc ->
                             if (lastLoc != null) {
                                 latitudCaptura = lastLoc.latitude.toString()
@@ -272,8 +305,18 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
 
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
         val cameraGranted = permissions[Manifest.permission.CAMERA] ?: false
-        if (cameraGranted) {
+        val locationGranted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] ?: false
+        if (cameraGranted && locationGranted) {
             cameraLauncher.launch()
+        } else {
+            showSecurityDialog = true
+            securityDialogTitle = "Permisos Denegados"
+            securityDialogMessage = "Para registrar la evidencia de manera segura, debes permitir el acceso a la Cámara y la Ubicación. Por favor, actívalos manualmente."
+            securityDialogButtonText = "IR A AJUSTES"
+            securityDialogIcon = Icons.Filled.Security
+            securityDialogAction = {
+                context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply { data = Uri.fromParts("package", context.packageName, null) })
+            }
         }
     }
 
@@ -326,7 +369,7 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
                                         Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
                                             Icon(Icons.Filled.CloudOff, contentDescription = null, tint = Color(0xFFD32F2F), modifier = Modifier.size(24.dp))
                                             Spacer(modifier = Modifier.width(12.dp))
-                                            Text(text = "MODO OFFLINE ACTIVADO", color = Color(0xFFD32F2F), fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, letterSpacing = 0.5.sp)
+                                            Text(text = "MODO SIN CONEXIÓN ACTIVADO", color = Color(0xFFD32F2F), fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, letterSpacing = 0.5.sp)
                                         }
                                     }
                                 }
@@ -377,18 +420,57 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
                                 isOnline = isOnline,
                                 refreshTrigger = refreshTrigger,
                                 onTomarFoto = { etapa ->
-                                    previewLugarId = lugar.id
-                                    previewEtapa = etapa
-                                    bitmapPreview = null
+                                    val gpsActivo = checkGpsStatusLocal(context)
+                                    val horaAutoActiva = checkAutoTimeEnabledLocal(context)
+                                    val modoAvionActivo = checkAirplaneModeLocal(context)
 
                                     val hasCameraPerm = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
-                                    if (hasCameraPerm) {
-                                        cameraLauncher.launch()
+                                    val hasLocationPerm = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+                                    if (!hasCameraPerm || !hasLocationPerm) {
+                                        showSecurityDialog = true
+                                        securityDialogTitle = "Permisos Faltantes"
+                                        securityDialogMessage = "La aplicación requiere permisos de Cámara y Ubicación para registrar la evidencia."
+                                        securityDialogButtonText = "PERMITIR"
+                                        securityDialogIcon = Icons.Filled.Security
+                                        securityDialogAction = {
+                                            permissionLauncher.launch(arrayOf(Manifest.permission.CAMERA, Manifest.permission.ACCESS_FINE_LOCATION))
+                                        }
+                                    } else if (modoAvionActivo) {
+                                        showSecurityDialog = true
+                                        securityDialogTitle = "Modo Avión Detectado"
+                                        securityDialogMessage = "Debes apagar el Modo Avión para poder registrar la foto correctamente y habilitar los sensores."
+                                        securityDialogButtonText = "APAGAR MODO AVIÓN"
+                                        securityDialogIcon = Icons.Filled.AirplanemodeActive
+                                        securityDialogAction = {
+                                            context.startActivity(Intent(Settings.ACTION_AIRPLANE_MODE_SETTINGS))
+                                        }
+                                    } else if (!gpsActivo) {
+                                        showSecurityDialog = true
+                                        securityDialogTitle = "GPS Desactivado"
+                                        securityDialogMessage = "El GPS de tu dispositivo se encuentra apagado. Es obligatorio encender la Ubicación para capturar la evidencia."
+                                        securityDialogButtonText = "ENCENDER GPS"
+                                        securityDialogIcon = Icons.Filled.LocationOff
+                                        securityDialogAction = {
+                                            context.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+                                        }
+                                    } else if (!horaAutoActiva) {
+                                        showSecurityDialog = true
+                                        securityDialogTitle = "Hora Automática"
+                                        securityDialogMessage = "Por seguridad, necesitas activar la 'Hora Automática de la red' en los ajustes de tu celular."
+                                        securityDialogButtonText = "ACTIVAR HORA"
+                                        securityDialogIcon = Icons.Filled.TimerOff
+                                        securityDialogAction = {
+                                            context.startActivity(Intent(Settings.ACTION_DATE_SETTINGS))
+                                        }
                                     } else {
-                                        permissionLauncher.launch(arrayOf(Manifest.permission.CAMERA, Manifest.permission.ACCESS_FINE_LOCATION))
+                                        previewLugarId = lugar.id
+                                        previewEtapa = etapa
+                                        bitmapPreview = null
+                                        cameraLauncher.launch()
                                     }
                                 },
-                                onGuardar = { etapa ->
+                                onGuardar = { etapa, observacionUsuario ->
                                     coroutineScope.launch {
                                         isUploading = true
                                         serverErrorDetails = ""
@@ -398,14 +480,14 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
                                             val latUsuario = latitudCaptura.toDoubleOrNull()
                                             val lonUsuario = longitudCaptura.toDoubleOrNull()
 
-                                            val estadoRed = if (isOnline) "ONLINE" else "OFFLINE"
+                                            val estadoRed = if (isOnline) "CONEXIÓN" else "SIN CONEXIÓN"
                                             var observacionFinal = ""
 
                                             if (latDestino != null && lonDestino != null && latUsuario != null && lonUsuario != null && latUsuario != 0.0) {
                                                 val results = FloatArray(1)
                                                 Location.distanceBetween(latDestino, lonDestino, latUsuario, lonUsuario, results)
                                                 val distanciaMetros = results[0].toInt()
-                                                val textoDistancia = if (distanciaMetros <= 300) "Dentro del radio ($distanciaMetros m)" else "Fuera del radio ($distanciaMetros m)"
+                                                val textoDistancia = if (distanciaMetros <= 300) "Dentro del rango ($distanciaMetros m)" else "Fuera del rango ($distanciaMetros m)"
                                                 observacionFinal = "Red: $estadoRed | $textoDistancia"
                                             } else {
                                                 observacionFinal = "Red: $estadoRed | Distancia desconocida"
@@ -433,6 +515,7 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
                                                     longitud = longitudCaptura.toRequestBody("text/plain".toMediaTypeOrNull()),
                                                     precisionGps = precisionCaptura.toRequestBody("text/plain".toMediaTypeOrNull()),
                                                     observacion = observacionFinal.toRequestBody("text/plain".toMediaTypeOrNull()),
+                                                    observacionVisita = observacionUsuario.toRequestBody("text/plain".toMediaTypeOrNull()),
                                                     foto = MultipartBody.Part.createFormData("foto", fileFoto.name, fileFoto.asRequestBody("image/jpeg".toMediaTypeOrNull()))
                                                 )
 
@@ -440,7 +523,7 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
                                                     serverErrorDetails = "Fallo al subir evidencia. Código HTTP: ${response.code()}"
                                                     return@launch
                                                 }
-                                                mensajeExitoDialog = "La evidencia de $etapa se subió correctamente."
+                                                mensajeExitoDialog = "La evidencia $etapa se subió correctamente."
                                             } else {
                                                 val nuevaEvidenciaOffline = VisitaEvidenciaEntity(
                                                     planId = idVisita,
@@ -457,20 +540,19 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
                                                     longitud = longitudCaptura,
                                                     precisionGps = precisionCaptura,
                                                     observacion = observacionFinal,
+                                                    observacionVisita = observacionUsuario, // Se guarda localmente
                                                     rutaFotoLocal = fileFoto.absolutePath
                                                 )
                                                 visitaDao.insertarEvidencia(nuevaEvidenciaOffline)
-                                                mensajeExitoDialog = "Modo Offline. Evidencia guardada en el dispositivo de forma segura."
+                                                mensajeExitoDialog = "Modo Sin Conexión. Evidencia $etapa guardada en el dispositivo de forma segura."
                                             }
 
-                                            val sharedPref = context.getSharedPreferences("EstadoVisitas", Context.MODE_PRIVATE)
-                                            val nuevoEstadoGlobal = if (etapa == "SALIDA") "COMPLETADO" else etapa
-
-                                            sharedPref.edit()
+                                            sharedPrefEstados.edit()
                                                 .putBoolean("visita_${idVisita}_lugar_${lugar.id}_$etapa", true)
                                                 .putString("visita_${idVisita}_lugar_${lugar.id}_${etapa}_hora", horaCaptura)
-                                                .putString("visita_${idVisita}", nuevoEstadoGlobal)
                                                 .apply()
+
+                                            evaluarYSincronizarPlanPadre(lugaresVisita)
 
                                             bitmapPreview = null
                                             refreshTrigger++
@@ -491,6 +573,40 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
             }
         }
 
+        if (showSecurityDialog) {
+            AlertDialog(
+                onDismissRequest = { showSecurityDialog = false },
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(securityDialogIcon, contentDescription = null, tint = Color(0xFFD32F2F), modifier = Modifier.size(26.dp))
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text(securityDialogTitle, color = Color(0xFFD32F2F), fontWeight = FontWeight.ExtraBold, fontSize = 20.sp)
+                    }
+                },
+                text = { Text(securityDialogMessage, fontSize = 15.sp, color = GrisTexto, lineHeight = 22.sp) },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            showSecurityDialog = false
+                            securityDialogAction()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = AzulPrincipal),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text(securityDialogButtonText, color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 8.dp))
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showSecurityDialog = false }) {
+                        Text("CANCELAR", color = Color.Gray, fontWeight = FontWeight.Bold)
+                    }
+                },
+                containerColor = Color.White,
+                shape = RoundedCornerShape(20.dp),
+                tonalElevation = 8.dp
+            )
+        }
+
         if (mostrarExitoDialog) {
             AlertDialog(
                 onDismissRequest = { },
@@ -505,7 +621,7 @@ fun CapturaScreen(navController: NavController, idVisita: String, nombrePlan: St
                 confirmButton = {
                     Button(onClick = {
                         mostrarExitoDialog = false
-                        cargarDetalle() // Recargar datos
+                        cargarDetalle()
                     }, colors = ButtonDefaults.buttonColors(containerColor = AzulPrincipal), shape = RoundedCornerShape(12.dp)) {
                         Text("CONTINUAR", color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 8.dp))
                     }
@@ -542,7 +658,7 @@ fun DiaAccordionItem(
     bitmapPreview: Bitmap?, previewEtapa: String, fechaCaptura: String, horaCaptura: String,
     isUploading: Boolean, isGpsCargando: Boolean, latitudCaptura: String, longitudCaptura: String, isOnline: Boolean,
     refreshTrigger: Int,
-    onTomarFoto: (String) -> Unit, onGuardar: (String) -> Unit
+    onTomarFoto: (String) -> Unit, onGuardar: (String, String) -> Unit
 ) {
     val sharedPref = context.getSharedPreferences("EstadoVisitas", Context.MODE_PRIVATE)
 
@@ -552,22 +668,22 @@ fun DiaAccordionItem(
 
     val pesoBackend = when(estadoBackend) {
         "COMPLETADO", "SALIDA", "CULMINADO", "FINALIZÓ", "CULMINO" -> 3
-        "MEDIO" -> 2
+        "INTERMEDIO", "MEDIO" -> 2
         "ENTRADA", "PROGRESO", "PROCESO" -> 1
         else -> 0
     }
 
     val entradaGuardada = sharedPref.getBoolean("visita_${idVisita}_lugar_${lugar.id}_ENTRADA", false) || pesoBackend >= 1
-    val medioGuardado = sharedPref.getBoolean("visita_${idVisita}_lugar_${lugar.id}_MEDIO", false) || pesoBackend >= 2
+    val intermedioGuardado = sharedPref.getBoolean("visita_${idVisita}_lugar_${lugar.id}_INTERMEDIO", false) || sharedPref.getBoolean("visita_${idVisita}_lugar_${lugar.id}_MEDIO", false) || pesoBackend >= 2
     val salidaGuardada = sharedPref.getBoolean("visita_${idVisita}_lugar_${lugar.id}_SALIDA", false) || pesoBackend >= 3
 
     val horaEntrada = sharedPref.getString("visita_${idVisita}_lugar_${lugar.id}_ENTRADA_hora", "") ?: ""
-    val horaMedio = sharedPref.getString("visita_${idVisita}_lugar_${lugar.id}_MEDIO_hora", "") ?: ""
+    val horaIntermedio = sharedPref.getString("visita_${idVisita}_lugar_${lugar.id}_INTERMEDIO_hora", "") ?: sharedPref.getString("visita_${idVisita}_lugar_${lugar.id}_MEDIO_hora", "") ?: ""
     val horaSalida = sharedPref.getString("visita_${idVisita}_lugar_${lugar.id}_SALIDA_hora", "") ?: ""
 
     val etapaActiva = when {
         !entradaGuardada -> "ENTRADA"
-        !medioGuardado -> "MEDIO"
+        !intermedioGuardado -> "INTERMEDIO"
         !salidaGuardada -> "SALIDA"
         else -> "COMPLETADO"
     }
@@ -585,7 +701,7 @@ fun DiaAccordionItem(
         if (fechaStatus == "PASADA" || estadoBackend == "NO CULMINADO") {
             visitaStatusText = "NO CULMINADO"
             visitaStatusColor = Color(0xFFD32F2F)
-        } else if (entradaGuardada || medioGuardado || salidaGuardada) {
+        } else if (entradaGuardada || intermedioGuardado || salidaGuardada) {
             visitaStatusText = "PROCESO"
             visitaStatusColor = Color(0xFFF57C00)
         } else {
@@ -660,14 +776,13 @@ fun DiaAccordionItem(
                             }
                             Spacer(modifier = Modifier.height(20.dp))
                             CapturedPhotoItem("ENTRADA", horaEntrada, idVisita, lugar.id, context, refreshTrigger)
-                            CapturedPhotoItem("MEDIO", horaMedio, idVisita, lugar.id, context, refreshTrigger)
+                            CapturedPhotoItem("INTERMEDIO", horaIntermedio, idVisita, lugar.id, context, refreshTrigger)
                             CapturedPhotoItem("SALIDA", horaSalida, idVisita, lugar.id, context, refreshTrigger)
                         }
                     } else {
-                        // AQUÍ PASAMOS EL estadoBackend AL NODO DE LA LÍNEA DE TIEMPO
-                        TimelineNode("1. ENTRADA", entradaGuardada, etapaActiva == "ENTRADA", isSystemReady, isDateValid, fechaStatus, estadoBackend, isUploading, isGpsCargando, latitudCaptura, longitudCaptura, if (previewEtapa == "ENTRADA") bitmapPreview else null, fechaCaptura, horaCaptura, horaEntrada, { onTomarFoto("ENTRADA") }, { onGuardar("ENTRADA") }, false)
-                        TimelineNode("2. MEDIO", medioGuardado, etapaActiva == "MEDIO", isSystemReady, isDateValid, fechaStatus, estadoBackend, isUploading, isGpsCargando, latitudCaptura, longitudCaptura, if (previewEtapa == "MEDIO") bitmapPreview else null, fechaCaptura, horaCaptura, horaMedio, { onTomarFoto("MEDIO") }, { onGuardar("MEDIO") }, false)
-                        TimelineNode("3. SALIDA", salidaGuardada, etapaActiva == "SALIDA", isSystemReady, isDateValid, fechaStatus, estadoBackend, isUploading, isGpsCargando, latitudCaptura, longitudCaptura, if (previewEtapa == "SALIDA") bitmapPreview else null, fechaCaptura, horaCaptura, horaSalida, { onTomarFoto("SALIDA") }, { onGuardar("SALIDA") }, true)
+                        TimelineNode("1. ENTRADA", entradaGuardada, etapaActiva == "ENTRADA", isSystemReady, isDateValid, fechaStatus, estadoBackend, isUploading, isGpsCargando, latitudCaptura, longitudCaptura, if (previewEtapa == "ENTRADA") bitmapPreview else null, fechaCaptura, horaCaptura, horaEntrada, onTomarFoto = { onTomarFoto("ENTRADA") }, onGuardar = { obs -> onGuardar("ENTRADA", obs) }, false)
+                        TimelineNode("2. INTERMEDIO", intermedioGuardado, etapaActiva == "INTERMEDIO", isSystemReady, isDateValid, fechaStatus, estadoBackend, isUploading, isGpsCargando, latitudCaptura, longitudCaptura, if (previewEtapa == "INTERMEDIO") bitmapPreview else null, fechaCaptura, horaCaptura, horaIntermedio, onTomarFoto = { onTomarFoto("INTERMEDIO") }, onGuardar = { obs -> onGuardar("INTERMEDIO", obs) }, false)
+                        TimelineNode("3. SALIDA", salidaGuardada, etapaActiva == "SALIDA", isSystemReady, isDateValid, fechaStatus, estadoBackend, isUploading, isGpsCargando, latitudCaptura, longitudCaptura, if (previewEtapa == "SALIDA") bitmapPreview else null, fechaCaptura, horaCaptura, horaSalida, onTomarFoto = { onTomarFoto("SALIDA") }, onGuardar = { obs -> onGuardar("SALIDA", obs) }, true)
                     }
                 }
             }
@@ -700,7 +815,6 @@ fun CapturedPhotoItem(etapa: String, hora: String, idVisita: String, idLugar: In
                     contentScale = ContentScale.Crop
                 )
             } else {
-                // CORRECCIÓN VISUAL: Ícono exitoso de Nube si la foto ya se envió al servidor y no está local.
                 Box(modifier = Modifier.size(64.dp).background(Color(0xFFE8F5E9), RoundedCornerShape(8.dp)), contentAlignment = Alignment.Center) {
                     Icon(Icons.Filled.CloudDone, contentDescription = "Sincronizado", tint = Color(0xFF4CAF50), modifier = Modifier.size(28.dp))
                 }
@@ -720,8 +834,19 @@ fun CapturedPhotoItem(etapa: String, hora: String, idVisita: String, idLugar: In
 }
 
 @Composable
-fun TimelineNode(titulo: String, isGuardado: Boolean, isActive: Boolean, isSystemReady: Boolean, isDateValid: Boolean, fechaStatus: String, estadoBackend: String, isUploading: Boolean, isGpsCargando: Boolean, latitudCaptura: String, longitudCaptura: String, bitmapActual: Bitmap?, fechaCaptura: String, horaCaptura: String, horaGuardada: String, onTomarFoto: () -> Unit, onGuardar: () -> Unit, isLast: Boolean) {
+fun TimelineNode(titulo: String, isGuardado: Boolean, isActive: Boolean, isSystemReady: Boolean, isDateValid: Boolean, fechaStatus: String, estadoBackend: String, isUploading: Boolean, isGpsCargando: Boolean, latitudCaptura: String, longitudCaptura: String, bitmapActual: Bitmap?, fechaCaptura: String, horaCaptura: String, horaGuardada: String, onTomarFoto: () -> Unit, onGuardar: (String) -> Unit, isLast: Boolean) {
     val isCaducado = fechaStatus == "PASADA" || estadoBackend == "NO CULMINADO"
+
+    // Controles para el cuadro de observación
+    var observacionTexto by remember { mutableStateOf("") }
+    var mostrarInput by remember { mutableStateOf(false) }
+
+    LaunchedEffect(bitmapActual) {
+        if (bitmapActual == null) {
+            observacionTexto = ""
+            mostrarInput = false
+        }
+    }
 
     Row(modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.width(36.dp)) {
@@ -777,24 +902,65 @@ fun TimelineNode(titulo: String, isGuardado: Boolean, isActive: Boolean, isSyste
                             }
                         }
 
+                        // NUEVO BLOQUE DE OBSERVACIÓN DEL DOCENTE
+                        AnimatedVisibility(visible = mostrarInput) {
+                            OutlinedTextField(
+                                value = observacionTexto,
+                                onValueChange = { observacionTexto = it },
+                                label = { Text("Escribe una observación (Opcional)", color = GrisTexto, fontSize = 13.sp) },
+                                modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = AzulPrincipal,
+                                    unfocusedBorderColor = GrisTexto.copy(alpha = 0.3f),
+                                ),
+                                shape = RoundedCornerShape(12.dp),
+                                minLines = 2,
+                                maxLines = 4
+                            )
+                        }
+
+                        if (!mostrarInput) {
+                            TextButton(
+                                onClick = { mostrarInput = true },
+                                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                            ) {
+                                Icon(Icons.Filled.EditNote, contentDescription = null, tint = AzulPrincipal)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("AÑADIR OBSERVACIÓN", color = AzulPrincipal, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            }
+                        }
+
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                            TextButton(onClick = onTomarFoto, enabled = isSystemReady) { Text("REPETIR", color = AzulPrincipal, fontSize = 13.sp, fontWeight = FontWeight.ExtraBold) }
+                            TextButton(onClick = {
+                                observacionTexto = ""
+                                mostrarInput = false
+                                onTomarFoto()
+                            }) { Text("REPETIR", color = AzulPrincipal, fontSize = 13.sp, fontWeight = FontWeight.ExtraBold) }
 
                             if (isGpsCargando) {
                                 Button(onClick = {}, enabled = false, colors = ButtonDefaults.buttonColors(containerColor = Color.Gray), shape = RoundedCornerShape(10.dp), contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp)) {
                                     Text("UBICANDO...", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                                 }
                             } else {
-                                Button(onClick = onGuardar, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50)), shape = RoundedCornerShape(10.dp), contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp)) {
-                                    Text("GUARDAR", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp, letterSpacing = 0.5.sp)
+                                Button(
+                                    onClick = {
+                                        if (latitudCaptura != "0.0" && latitudCaptura.isNotEmpty()) {
+                                            onGuardar(observacionTexto)
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = if(latitudCaptura == "0.0" || latitudCaptura.isEmpty()) Color.Gray else Color(0xFF4CAF50)),
+                                    shape = RoundedCornerShape(10.dp),
+                                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp)
+                                ) {
+                                    Text(if(latitudCaptura == "0.0" || latitudCaptura.isEmpty()) "SIN GPS" else "GUARDAR", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp, letterSpacing = 0.5.sp)
                                 }
                             }
                         }
                     } else {
                         OutlinedButton(
-                            onClick = onTomarFoto, modifier = Modifier.fillMaxWidth().height(48.dp), shape = RoundedCornerShape(12.dp), enabled = isSystemReady,
+                            onClick = onTomarFoto, modifier = Modifier.fillMaxWidth().height(48.dp), shape = RoundedCornerShape(12.dp),
                             colors = ButtonDefaults.outlinedButtonColors(contentColor = AzulPrincipal),
-                            border = androidx.compose.foundation.BorderStroke(1.5.dp, if(!isSystemReady) Color.Red.copy(alpha=0.3f) else AzulPrincipal.copy(alpha=0.5f))
+                            border = androidx.compose.foundation.BorderStroke(1.5.dp, AzulPrincipal.copy(alpha=0.5f))
                         ) {
                             Icon(Icons.Filled.PhotoCamera, null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(10.dp))
@@ -879,6 +1045,14 @@ fun getFechaStatus(fechaLugar: String): String {
     }
 }
 
-fun checkGpsStatusLocal(context: Context): Boolean = (context.getSystemService(Context.LOCATION_SERVICE) as LocationManager).isProviderEnabled(LocationManager.GPS_PROVIDER)
+fun checkGpsStatusLocal(context: Context): Boolean {
+    val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+    return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+        locationManager.isLocationEnabled
+    } else {
+        locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)
+    }
+}
+
 fun checkAutoTimeEnabledLocal(context: Context): Boolean = try { Settings.Global.getInt(context.contentResolver, Settings.Global.AUTO_TIME) == 1 } catch (e: Exception) { false }
 fun checkAirplaneModeLocal(context: Context): Boolean = Settings.Global.getInt(context.contentResolver, Settings.Global.AIRPLANE_MODE_ON, 0) != 0

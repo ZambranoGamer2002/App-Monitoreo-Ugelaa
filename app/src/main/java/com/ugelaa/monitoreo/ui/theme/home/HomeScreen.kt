@@ -26,7 +26,6 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.rounded.DateRange
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.LocationOn
-import androidx.compose.material.icons.rounded.Map
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -38,6 +37,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -56,6 +56,7 @@ import com.ugelaa.monitoreo.R
 import com.ugelaa.monitoreo.data.RetrofitClient
 import com.ugelaa.monitoreo.data.local.AppDatabase
 import com.ugelaa.monitoreo.data.local.SyncWorker
+import com.ugelaa.monitoreo.model.PerfilResponse
 import com.ugelaa.monitoreo.model.Visita
 import com.ugelaa.monitoreo.ui.theme.AsideFondo
 import com.ugelaa.monitoreo.ui.theme.AzulPrincipal
@@ -63,7 +64,9 @@ import com.ugelaa.monitoreo.ui.theme.GrisFondoApp
 import com.ugelaa.monitoreo.ui.theme.GrisTexto
 import com.ugelaa.monitoreo.utils.SessionManager
 import com.ugelaa.monitoreo.utils.observeConnectivityAsFlow
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.text.SimpleDateFormat
@@ -84,6 +87,7 @@ fun HomeScreen(navController: NavController, nombreUser: String, nicknameUser: S
     val sessionManager = remember { SessionManager(context) }
 
     val tokenGuardado by sessionManager.getToken.collectAsState(initial = "")
+    val dniGuardado by sessionManager.getDni.collectAsState(initial = "")
 
     LaunchedEffect(isOnline) {
         if (isOnline) {
@@ -130,7 +134,7 @@ fun HomeScreen(navController: NavController, nombreUser: String, nicknameUser: S
                             ) {
                                 Icon(Icons.Filled.WifiOff, contentDescription = "Sin Internet", tint = Color(0xFFEF5350), modifier = Modifier.size(22.dp))
                                 Spacer(modifier = Modifier.width(10.dp))
-                                Text("MODO OFFLINE", color = Color(0xFFEF5350), fontWeight = FontWeight.ExtraBold, fontSize = 13.sp, letterSpacing = 1.sp)
+                                Text("MODO SIN CONEXIÓN", color = Color(0xFFEF5350), fontWeight = FontWeight.ExtraBold, fontSize = 13.sp, letterSpacing = 1.sp)
                             }
                         }
                     }
@@ -183,8 +187,12 @@ fun HomeScreen(navController: NavController, nombreUser: String, nicknameUser: S
                             when (pantalla) {
                                 "Inicio" -> PantallaInicio(nombreUser)
                                 "Visitas" -> PantallaVisitas(navController, tokenGuardado)
-                                "Historial" -> PantallaHistorialVisitas(navController, tokenGuardado)
-                                "Datos Personales" -> PantallaDatosPersonales(nombreUser, nicknameUser)
+                                "Historial" -> PantallaHistorialVisitas(tokenGuardado)
+                                "Datos Personales" -> PantallaDatosPersonales(
+                                    nombreUser = nombreUser,
+                                    dniUser = dniGuardado.ifEmpty { "No registrado" },
+                                    token = tokenGuardado
+                                )
                                 "Configuración" -> PantallaConfiguracion()
                             }
                         }
@@ -230,14 +238,15 @@ fun PantallaVisitas(navController: NavController, token: String) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val sharedPrefCache = context.getSharedPreferences("CacheVisitas", Context.MODE_PRIVATE)
+    val sharedPrefEstados = context.getSharedPreferences("EstadoVisitas", Context.MODE_PRIVATE)
     val visitaDao = remember { AppDatabase.getDatabase(context).visitaDao() }
     val gson = remember { Gson() }
     val coroutineScope = rememberCoroutineScope()
+    val sessionManager = remember { SessionManager(context) }
 
     var listaVisitas by remember { mutableStateOf<List<Visita>>(emptyList()) }
     var cantidadPendientesOffline by remember { mutableStateOf(0) }
     var isLoading by remember { mutableStateOf(false) }
-    var errorMessage by remember { mutableStateOf("") }
 
     var mostrarDialogoAlertaFecha by remember { mutableStateOf(false) }
 
@@ -253,34 +262,64 @@ fun PantallaVisitas(navController: NavController, token: String) {
                 try {
                     val response = RetrofitClient.apiService.getVisitas("Bearer $token")
                     if (response.isSuccessful && response.body() != null) {
-                        val listaApi = response.body()!!
+                        var rawString = response.body()!!.string().trim()
 
-                        // --- AVISAR AL BACKEND DE LOS PLANES VENCIDOS OCULTOS ---
-                        val planesVencidos = listaApi.filter { !esVisitaActiva(it.fecha_fin) }.map { it.id }
-                        if (planesVencidos.isNotEmpty()) {
-                            try {
-                                RetrofitClient.apiService.marcarVisitasVencidas("Bearer $token", planesVencidos)
+                        if (rawString.startsWith("\"") && rawString.endsWith("\"")) {
+                            rawString = try {
+                                gson.fromJson(rawString, String::class.java).trim()
                             } catch (e: Exception) {
-                                // Falla silenciosa, reintentará en el próximo refresh
+                                rawString.substring(1, rawString.length - 1).replace("\\\"", "\"")
                             }
                         }
-                        // ---------------------------------------------------------
 
-                        val jsonAntiguo = sharedPrefCache.getString("planes_offline", "[]")
-                        val type = object : TypeToken<List<Visita>>() {}.type
-                        val listaAntigua: List<Visita> = try { gson.fromJson(jsonAntiguo, type) ?: emptyList() } catch (e: Exception) { emptyList() }
+                        if (rawString.startsWith("[")) {
+                            val type = object : TypeToken<List<Visita>>() {}.type
+                            val listaApi: List<Visita> = gson.fromJson(rawString, type)
 
-                        val planesRescatados = listaAntigua.filter { planAntiguo ->
-                            listaApi.none { it.id == planAntiguo.id }
+                            listaApi.forEach { plan ->
+                                val estadoLocal = sharedPrefEstados.getString("visita_${plan.id}", "")
+                                val estaFinalizadoLocal = estadoLocal == "FINALIZADA" || estadoLocal == "COMPLETADO"
+
+                                if (estaFinalizadoLocal) {
+                                    try {
+                                        withContext(Dispatchers.IO) {
+                                            RetrofitClient.apiService.planFinalizado("Bearer $token", plan.id)
+                                        }
+                                    } catch (e: Exception) {
+                                        e.printStackTrace()
+                                    }
+                                }
+                            }
+
+                            val evidenciasPendientes = visitaDao.obtenerEvidenciasPendientes()
+                            val idsPlanesConOffline = evidenciasPendientes.map { it.planId }.toSet()
+
+                            val jsonAntiguo = sharedPrefCache.getString("planes_offline", "[]")
+                            val typeAntiguo = object : TypeToken<List<Visita>>() {}.type
+                            val listaAntigua: List<Visita> = try { gson.fromJson(jsonAntiguo, typeAntiguo) ?: emptyList() } catch (e: Exception) { emptyList() }
+
+                            val planesRescatados = listaAntigua.filter { planAntiguo ->
+                                listaApi.none { it.id == planAntiguo.id } && idsPlanesConOffline.contains(planAntiguo.id.toString())
+                            }.map { planHuerfano ->
+                                val nombreActual = planHuerfano.nombre_visitas ?: "Visita"
+                                if (!nombreActual.contains("(Plan Eliminado)")) {
+                                    planHuerfano.copy(nombre_visitas = "$nombreActual (Plan Eliminado)")
+                                } else {
+                                    planHuerfano
+                                }
+                            }
+
+                            listaVisitas = listaApi + planesRescatados
+                            sharedPrefCache.edit().putString("planes_offline", gson.toJson(listaVisitas)).apply()
                         }
-
-                        listaVisitas = listaApi + planesRescatados
-                        sharedPrefCache.edit().putString("planes_offline", gson.toJson(listaVisitas)).apply()
-                    } else {
-                        errorMessage = "Error de servidor. Código: ${response.code()}"
+                    } else if (response.code() == 401) {
+                        sessionManager.limpiarSesion()
+                        navController.navigate("login_screen") {
+                            popUpTo(navController.graph.id) { inclusive = true }
+                        }
                     }
                 } catch (e: Exception) {
-                    errorMessage = "Sin conexión a internet. Mostrando vista local."
+                    e.printStackTrace()
                 } finally {
                     isLoading = false
                 }
@@ -319,6 +358,7 @@ fun PantallaVisitas(navController: NavController, token: String) {
                 isGpsEnabled = checkGpsStatus(context)
                 isAutoTimeEnabled = checkAutoTimeEnabled(context)
                 isAirplaneModeOn = checkAirplaneMode(context)
+                cargarVisitas()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -339,7 +379,7 @@ fun PantallaVisitas(navController: NavController, token: String) {
                         Icon(Icons.Filled.CloudUpload, contentDescription = null, tint = Color(0xFFE65100), modifier = Modifier.size(28.dp))
                         Spacer(modifier = Modifier.width(16.dp))
                         Column(modifier = Modifier.weight(1f)) {
-                            Text("Tienes $cantidadPendientesOffline registro(s) offline.", fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, color = Color(0xFFE65100))
+                            Text("Tienes $cantidadPendientesOffline registro(s) sin conexión.", fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, color = Color(0xFFE65100))
                             Text("Se subirán automáticamente cuando haya internet.", fontSize = 12.sp, color = Color(0xFFEF6C00))
                         }
                     }
@@ -370,7 +410,7 @@ fun PantallaVisitas(navController: NavController, token: String) {
                             }
                         }
                         if (!isAutoTimeEnabled) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 6.dp)) {
                                 Icon(Icons.Filled.TimerOff, contentDescription = null, tint = Color(0xFFB71C1C), modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text("La 'Hora Automática' está desactivada.", color = Color(0xFFB71C1C), fontSize = 13.sp, fontWeight = FontWeight.Medium)
@@ -394,9 +434,23 @@ fun PantallaVisitas(navController: NavController, token: String) {
                 }
             } else {
                 visitasActivas.forEach { visita ->
+                    val estadoLocal = sharedPrefEstados.getString("visita_${visita.id}", "")
+                    val estaFinalizada = estadoLocal == "FINALIZADA" || estadoLocal == "COMPLETADO" || visita.estado?.uppercase(Locale.ROOT) == "FINALIZADA"
                     val isFutura = esVisitaFutura(visita.fecha_inicio)
-                    val textoEstadoPlan = if (isFutura) "EN PROCESO" else "PENDIENTE"
-                    val colorEstadoPlan = if (isFutura) Color(0xFFF57C00) else AzulPrincipal
+
+                    val textoEstadoPlan: String
+                    val colorEstadoPlan: Color
+
+                    if (estaFinalizada) {
+                        textoEstadoPlan = "FINALIZADA"
+                        colorEstadoPlan = Color(0xFF2E7D32)
+                    } else if (isFutura) {
+                        textoEstadoPlan = "EN PROCESO"
+                        colorEstadoPlan = Color(0xFFF57C00)
+                    } else {
+                        textoEstadoPlan = "PENDIENTE"
+                        colorEstadoPlan = AzulPrincipal
+                    }
 
                     VisitaCardPremium(
                         nombrePlan = visita.nombre_visitas ?: "Sin Nombre",
@@ -405,7 +459,7 @@ fun PantallaVisitas(navController: NavController, token: String) {
                         colorBadge = colorEstadoPlan,
                         isExpired = false,
                         onClick = {
-                            if (isFutura) {
+                            if (isFutura && !estaFinalizada) {
                                 mostrarDialogoAlertaFecha = true
                             } else if (isSystemReady) {
                                 val idCodificado = visita.id.toString()
@@ -458,7 +512,7 @@ fun PantallaVisitas(navController: NavController, token: String) {
 
 @OptIn(ExperimentalMaterialApi::class)
 @Composable
-fun PantallaHistorialVisitas(navController: NavController, token: String) {
+fun PantallaHistorialVisitas(token: String) {
     val context = LocalContext.current
     val sharedPrefCache = context.getSharedPreferences("CacheVisitas", Context.MODE_PRIVATE)
     val gson = remember { Gson() }
@@ -474,31 +528,24 @@ fun PantallaHistorialVisitas(navController: NavController, token: String) {
                 try {
                     val response = RetrofitClient.apiService.getVisitas("Bearer $token")
                     if (response.isSuccessful && response.body() != null) {
-                        val listaApi = response.body()!!
+                        var rawString = response.body()!!.string().trim()
 
-                        // --- AVISAR AL BACKEND DE LOS PLANES VENCIDOS OCULTOS ---
-                        val planesVencidos = listaApi.filter { !esVisitaActiva(it.fecha_fin) }.map { it.id }
-                        if (planesVencidos.isNotEmpty()) {
-                            try {
-                                RetrofitClient.apiService.marcarVisitasVencidas("Bearer $token", planesVencidos)
-                            } catch (e: Exception) {}
-                        }
-                        // ---------------------------------------------------------
-
-                        val jsonAntiguo = sharedPrefCache.getString("planes_offline", "[]")
-                        val type = object : TypeToken<List<Visita>>() {}.type
-                        val listaAntigua: List<Visita> = try { gson.fromJson(jsonAntiguo, type) ?: emptyList() } catch (e: Exception) { emptyList() }
-
-                        val planesRescatados = listaAntigua.filter { planAntiguo ->
-                            listaApi.none { it.id == planAntiguo.id }
+                        if (rawString.startsWith("\"") && rawString.endsWith("\"")) {
+                            rawString = try {
+                                gson.fromJson(rawString, String::class.java).trim()
+                            } catch (e: Exception) {
+                                rawString.substring(1, rawString.length - 1).replace("\\\"", "\"")
+                            }
                         }
 
-                        val listaActualizada = listaApi + planesRescatados
-                        sharedPrefCache.edit().putString("planes_offline", gson.toJson(listaActualizada)).apply()
-                        listaVisitas = listaActualizada
+                        if (rawString.startsWith("[")) {
+                            val type = object : TypeToken<List<Visita>>() {}.type
+                            val listaApi: List<Visita> = gson.fromJson(rawString, type)
+                            listaVisitas = listaApi
+                        }
                     }
                 } catch (e: Exception) {
-                    // Mantiene los datos cacheados
+                    e.printStackTrace()
                 } finally {
                     isLoading = false
                 }
@@ -527,7 +574,10 @@ fun PantallaHistorialVisitas(navController: NavController, token: String) {
         }
     }
 
-    val visitasPasadas = listaVisitas.filter { !esVisitaActiva(it.fecha_fin) && !it.fecha_fin.isNullOrBlank() }
+    val visitasHistorial = listaVisitas.filter { visita ->
+        val fechaFinPasada = !esVisitaActiva(visita.fecha_fin) && !visita.fecha_fin.isNullOrBlank()
+        fechaFinPasada && !esVisitaExpirada(visita.fecha_fin)
+    }
 
     Box(modifier = Modifier.fillMaxSize().pullRefresh(pullRefreshState)) {
         Column(modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp).verticalScroll(rememberScrollState())) {
@@ -535,11 +585,11 @@ fun PantallaHistorialVisitas(navController: NavController, token: String) {
             Text(text = "Historial de Visitas", fontWeight = FontWeight.ExtraBold, fontSize = 26.sp, color = AsideFondo, letterSpacing = (-0.5).sp)
             Text(text = "Desliza hacia abajo para cargar visitas finalizadas.", color = GrisTexto, fontSize = 14.sp, modifier = Modifier.padding(top = 6.dp, bottom = 28.dp))
 
-            if (isLoading && visitasPasadas.isEmpty()) {
+            if (isLoading && visitasHistorial.isEmpty()) {
                 Box(modifier = Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(color = AzulPrincipal, strokeWidth = 4.dp, modifier = Modifier.size(48.dp))
                 }
-            } else if (visitasPasadas.isEmpty()) {
+            } else if (visitasHistorial.isEmpty()) {
                 Box(modifier = Modifier.fillMaxWidth().padding(top = 64.dp), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Icon(Icons.Filled.History, contentDescription = null, tint = GrisTexto.copy(alpha = 0.4f), modifier = Modifier.size(64.dp))
@@ -548,18 +598,14 @@ fun PantallaHistorialVisitas(navController: NavController, token: String) {
                     }
                 }
             } else {
-                visitasPasadas.forEach { visita ->
+                visitasHistorial.forEach { visita ->
                     VisitaCardPremium(
                         nombrePlan = visita.nombre_visitas ?: "Sin Nombre",
                         fecha = "Del ${visita.fecha_inicio ?: "-"} al ${visita.fecha_fin ?: "-"}",
-                        estado = "FINALIZADO",
-                        colorBadge = Color(0xFF757575),
+                        estado = "FINALIZADA",
+                        colorBadge = Color(0xFF2E7D32),
                         isExpired = true,
-                        onClick = {
-                            val idCodificado = visita.id.toString()
-                            val nombreCodificado = URLEncoder.encode(visita.nombre_visitas ?: "Visita", StandardCharsets.UTF_8.toString())
-                            navController.navigate("captura_visita/$idCodificado/$nombreCodificado")
-                        }
+                        onClick = {}
                     )
                     Spacer(modifier = Modifier.height(20.dp))
                 }
@@ -590,8 +636,8 @@ fun VisitaCardPremium(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.elevatedCardColors(containerColor = if (isExpired) Color(0xFFFAFAFA) else Color.White),
-        elevation = CardDefaults.elevatedCardElevation(defaultElevation = if (isExpired) 2.dp else 8.dp)
+        colors = CardDefaults.elevatedCardColors(containerColor = if (isExpired && colorBadge != Color(0xFF2E7D32)) Color(0xFFFAFAFA) else Color.White),
+        elevation = CardDefaults.elevatedCardElevation(defaultElevation = if (isExpired && colorBadge != Color(0xFF2E7D32)) 2.dp else 8.dp)
     ) {
         Column(modifier = Modifier.padding(24.dp)) {
             Row(
@@ -616,7 +662,7 @@ fun VisitaCardPremium(
                 text = nombrePlan,
                 fontWeight = FontWeight.ExtraBold,
                 fontSize = 20.sp,
-                color = if (isExpired) GrisTexto else AsideFondo,
+                color = AsideFondo,
                 lineHeight = 26.sp,
                 letterSpacing = (-0.2).sp
             )
@@ -624,7 +670,7 @@ fun VisitaCardPremium(
             Divider(color = GrisFondoApp, thickness = 2.dp)
             Spacer(modifier = Modifier.height(20.dp))
 
-            DetailRowPremium(icon = Icons.Rounded.DateRange, text = fecha, isExpired = isExpired)
+            DetailRowPremium(icon = Icons.Rounded.DateRange, text = fecha, isExpired = isExpired && colorBadge != Color(0xFF2E7D32))
         }
     }
 }
@@ -789,16 +835,62 @@ fun PantallaInicio(nombreUser: String) {
         Spacer(modifier = Modifier.height(28.dp))
         Text(text = "¡Hola, $nombreUser!", fontWeight = FontWeight.ExtraBold, fontSize = 32.sp, color = AsideFondo, textAlign = androidx.compose.ui.text.style.TextAlign.Center, letterSpacing = (-0.5).sp)
         Spacer(modifier = Modifier.height(16.dp))
-        Text(text = "Estás listo para gestionar tus visitas y reportar evidencias de forma rápida, tanto online como offline.", color = GrisTexto, fontSize = 16.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center, lineHeight = 26.sp)
+        Text(text = "Estás listo para gestionar tus visitas y reportar evidencias de forma rápida, tanto con conexión como sin conexión.", color = GrisTexto, fontSize = 16.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center, lineHeight = 26.sp)
     }
 }
 
 @Composable
-fun PantallaDatosPersonales(nombreUser: String, nicknameUser: String) {
+fun PantallaDatosPersonales(nombreUser: String, dniUser: String, token: String) {
+    val gson = remember { Gson() }
+
+    var cargo by remember { mutableStateOf("Cargando...") }
+    var oficina by remember { mutableStateOf("Cargando...") }
+
+    var isLoading by remember { mutableStateOf(false) }
+
+    LaunchedEffect(token) {
+        if (token.isNotEmpty()) {
+            isLoading = true
+            try {
+                val response = RetrofitClient.apiService.getPerfil("Bearer $token")
+                if (response.isSuccessful && response.body() != null) {
+                    val rawString = response.body()!!.string().trim()
+                    try {
+                        val perfil = gson.fromJson(rawString, PerfilResponse::class.java)
+                        if (perfil.success && perfil.usuario != null) {
+                            cargo = perfil.usuario.cargo ?: "No asignado"
+                            oficina = perfil.usuario.oficina ?: "No asignada"
+                        } else {
+                            cargo = "No disponible"
+                            oficina = "No disponible"
+                        }
+                    } catch (e: Exception) {
+                        cargo = "Error de formato"
+                        oficina = "Error de formato"
+                    }
+                } else {
+                    cargo = "Error al cargar"
+                    oficina = "Error al cargar"
+                }
+            } catch (e: Exception) {
+                cargo = "Sin conexión"
+                oficina = "Sin conexión"
+            } finally {
+                isLoading = false
+            }
+        }
+    }
+
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp).verticalScroll(rememberScrollState())) {
         Spacer(modifier = Modifier.height(32.dp))
+
         Text(text = "Tu Perfil", fontWeight = FontWeight.ExtraBold, fontSize = 26.sp, color = AsideFondo, letterSpacing = (-0.5).sp)
-        Spacer(modifier = Modifier.height(24.dp))
+        Text(
+            text = "Información del docente registrada en el sistema.",
+            color = GrisTexto,
+            fontSize = 14.sp,
+            modifier = Modifier.padding(top = 6.dp, bottom = 24.dp)
+        )
 
         ElevatedCard(
             modifier = Modifier.fillMaxWidth(),
@@ -806,12 +898,23 @@ fun PantallaDatosPersonales(nombreUser: String, nicknameUser: String) {
             colors = CardDefaults.elevatedCardColors(containerColor = Color.White),
             elevation = CardDefaults.elevatedCardElevation(defaultElevation = 8.dp)
         ) {
-            Column(modifier = Modifier.padding(32.dp)) {
-                CampoLectura(label = "DNI / Usuario", valor = nicknameUser, modifier = Modifier.fillMaxWidth())
-                Spacer(modifier = Modifier.height(24.dp))
-                CampoLectura(label = "Nombres y Apellidos", valor = nombreUser, modifier = Modifier.fillMaxWidth())
+            Column(modifier = Modifier.padding(28.dp)) {
+                if (isLoading && cargo == "Cargando...") {
+                    Box(modifier = Modifier.fillMaxWidth().height(100.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = AzulPrincipal, strokeWidth = 3.dp)
+                    }
+                } else {
+                    CampoLectura(label = "DNI", valor = dniUser, modifier = Modifier.fillMaxWidth())
+                    Spacer(modifier = Modifier.height(20.dp))
+                    CampoLectura(label = "Nombres y Apellidos", valor = nombreUser, modifier = Modifier.fillMaxWidth())
+                    Spacer(modifier = Modifier.height(20.dp))
+                    CampoLectura(label = "Oficina", valor = oficina, modifier = Modifier.fillMaxWidth())
+                    Spacer(modifier = Modifier.height(20.dp))
+                    CampoLectura(label = "Cargo", valor = cargo, modifier = Modifier.fillMaxWidth())
+                }
             }
         }
+        Spacer(modifier = Modifier.height(32.dp))
     }
 }
 
@@ -877,6 +980,22 @@ fun esVisitaFutura(fechaInicio: String?): Boolean {
         val dateHoy = sdfHoy.parse(sdfHoy.format(Date())) ?: return false
 
         dateInicio.after(dateHoy)
+    } catch (e: Exception) {
+        false
+    }
+}
+
+fun esVisitaExpirada(fechaFin: String?): Boolean {
+    if (fechaFin.isNullOrBlank()) return false
+    return try {
+        val formatStr = if (fechaFin.contains("/")) "dd/MM/yyyy" else "yyyy-MM-dd"
+        val sdfFin = SimpleDateFormat(formatStr, Locale.getDefault())
+        val dateFin = sdfFin.parse(fechaFin) ?: return false
+
+        val sdfHoy = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+        val dateHoy = sdfHoy.parse(sdfHoy.format(Date())) ?: return false
+
+        dateFin.before(dateHoy)
     } catch (e: Exception) {
         false
     }
