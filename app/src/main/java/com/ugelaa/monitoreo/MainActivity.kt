@@ -1,6 +1,8 @@
 package com.ugelaa.monitoreo
 
+import android.app.Activity
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -18,6 +20,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.navigation.NavController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -33,6 +36,7 @@ import com.ugelaa.monitoreo.ui.theme.splash.SplashScreen
 import com.ugelaa.monitoreo.ui.theme.login.LoginScreen
 import com.ugelaa.monitoreo.ui.theme.home.CapturaScreen
 import com.ugelaa.monitoreo.utils.SessionManager
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -63,7 +67,8 @@ fun AppNavigation() {
 
     var startRoute by remember { mutableStateOf<String?>(null) }
 
-    GuardianActualizaciones()
+    // Pasamos navController y sessionManager al Guardián
+    GuardianActualizaciones(navController = navController, sessionManager = sessionManager)
 
     LaunchedEffect(isLoggedIn) {
         if (startRoute == null && isLoggedIn != null) {
@@ -115,19 +120,16 @@ fun AppNavigation() {
 // COMPONENTE: GUARDIÁN DE ACTUALIZACIONES
 // -------------------------------------------------------------------------
 @Composable
-fun GuardianActualizaciones() {
+fun GuardianActualizaciones(navController: NavController, sessionManager: SessionManager) {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
     var mostrarDialogoBloqueo by remember { mutableStateOf(false) }
 
-    // URL DE DESCARGA: Reemplaza con la ruta de tu servidor o web
-    var urlDescarga by remember { mutableStateOf("https://www.ugelaa.gob.pe/") }
-
-    // Obtener la versión instalada (VersionCode del build.gradle.kts)
-    val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
-    val versionInstalada = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
-        packageInfo.longVersionCode.toInt()
-    } else {
-        packageInfo.versionCode
+    // Obtener la versión instalada de la app como texto (Ej: "1.0.1")
+    val versionInstaladaStr = try {
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "1.0"
+    } catch (e: PackageManager.NameNotFoundException) {
+        "1.0"
     }
 
     LaunchedEffect(Unit) {
@@ -136,28 +138,44 @@ fun GuardianActualizaciones() {
             if (response.isSuccessful && response.body() != null) {
                 val listaActualizaciones = response.body()!!
 
-                // Buscar la última versión que esté con estado "Activo"
+                // Buscar la última versión en la base de datos que tenga estado Activo
                 val actualizacionActiva = listaActualizaciones.lastOrNull {
-                    it.estado.equals("Activo", ignoreCase = true)
+                    it.estado.equals("Activo", ignoreCase = true) || it.estado == "1"
                 }
 
                 if (actualizacionActiva != null) {
-                    val versionServidor = actualizacionActiva.version_actual.toIntOrNull() ?: 0
+                    val versionServidor = actualizacionActiva.version_actual.trim()
 
-                    // Si el servidor exige una versión mayor a la que tenemos, BLOQUEAMOS
-                    if (versionServidor > versionInstalada) {
+                    // REGLA ESTRICTA: Si la versión no coincide, se cierra la sesión y se bloquea
+                    if (versionServidor != versionInstaladaStr.trim()) {
+
+                        // 1. Limpiar sesión (Elimina token, DNI, datos)
+                        coroutineScope.launch {
+                            sessionManager.limpiarSesion()
+                        }
+
+                        // 2. Expulsar al usuario hacia el Login
+                        try {
+                            navController.navigate("login_screen") {
+                                popUpTo(navController.graph.id) { inclusive = true }
+                            }
+                        } catch (e: Exception) {
+                            // Ignorar error si el navController aún no está listo
+                        }
+
+                        // 3. Levantar la pantalla de bloqueo
                         mostrarDialogoBloqueo = true
                     }
                 }
             }
         } catch (e: Exception) {
-            // Si no hay red, no bloqueamos para permitir el Modo Offline de la app
+            // Modo "Sin Conexión": Si no hay red, no bloqueamos la app
         }
     }
 
     if (mostrarDialogoBloqueo) {
         AlertDialog(
-            onDismissRequest = { /* Vacío: No se cierra al tocar fuera */ },
+            onDismissRequest = { /* Vacío para impedir que se cierre al tocar los bordes */ },
             title = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Filled.SystemUpdate, contentDescription = null, tint = AzulPrincipal)
@@ -167,24 +185,29 @@ fun GuardianActualizaciones() {
             },
             text = {
                 Text(
-                    "Tu aplicación está desactualizada. Para continuar y poder iniciar sesión o registrar visitas, es obligatorio descargar la nueva versión.",
+                    "Tu versión actual ($versionInstaladaStr) está obsoleta. Por motivos de seguridad, tu sesión ha sido cerrada.\n\nPor favor, ingresa al portal web para descargar la nueva actualización y poder continuar.",
                     color = GrisTexto
                 )
             },
             confirmButton = {
                 Button(
                     onClick = {
-                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(urlDescarga))
+                        // Mandar al usuario al enlace indicado
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://simoplan.ugelaa.gob.pe/login"))
                         context.startActivity(intent)
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = AzulPrincipal),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text("DESCARGAR E INSTALAR", color = Color.White, fontWeight = FontWeight.Bold)
+                    Text("IR AL PORTAL DE DESCARGA", color = Color.White, fontWeight = FontWeight.Bold)
                 }
             },
             containerColor = Color.White,
-            shape = RoundedCornerShape(16.dp)
+            shape = RoundedCornerShape(16.dp),
+            properties = androidx.compose.ui.window.DialogProperties(
+                dismissOnBackPress = false, // Impide cerrar con el botón "Atrás" del celular
+                dismissOnClickOutside = false
+            )
         )
     }
 }

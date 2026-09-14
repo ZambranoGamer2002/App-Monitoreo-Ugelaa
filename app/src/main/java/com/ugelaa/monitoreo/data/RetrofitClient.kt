@@ -84,7 +84,7 @@ interface ApiService {
     ): Response<Any>
 
     @Headers("Accept: application/json")
-    @GET("api/movil/actualizaciones")
+    @GET("api/actualizaciones")
     suspend fun verificarActualizacion(): Response<List<Actualizacion>>
 
     @Headers("Accept: application/json")

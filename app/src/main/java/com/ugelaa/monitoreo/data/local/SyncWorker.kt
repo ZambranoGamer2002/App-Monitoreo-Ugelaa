@@ -56,24 +56,22 @@ class SyncWorker(
                     latitud = evidencia.latitud.toRequestBody("text/plain".toMediaTypeOrNull()),
                     longitud = evidencia.longitud.toRequestBody("text/plain".toMediaTypeOrNull()),
                     precisionGps = evidencia.precisionGps.toRequestBody("text/plain".toMediaTypeOrNull()),
-                    observacion = evidencia.observacion.toRequestBody("text/plain".toMediaTypeOrNull()),
-                    observacionVisita = evidencia.observacion.toRequestBody("text/plain".toMediaTypeOrNull()),
+                    observacion = evidencia.observacion.toRequestBody("text/plain".toMediaTypeOrNull()), // GPS / Red
+                    observacionVisita = evidencia.observacionVisita.toRequestBody("text/plain".toMediaTypeOrNull()), // Observación del docente
                     foto = MultipartBody.Part.createFormData("foto", file.name, file.asRequestBody("image/jpeg".toMediaTypeOrNull()))
                 )
 
                 if (response.isSuccessful) {
-
                     visitaDao.eliminarEvidencia(evidencia)
                     file.delete()
                 } else {
-
                     allSuccessful = false
                 }
             } catch (e: Exception) {
                 allSuccessful = false
             }
         }
-        
+
         return if (allSuccessful) Result.success() else Result.retry()
     }
 }

@@ -19,7 +19,7 @@ android {
         minSdk = 24
         targetSdk = 36
         versionCode = 1     //Numero de actualización (VERSION ACTUAL + 1)
-        versionName = "1.0" //Version de la apliacion "Primera" (Cambios) + "Segunda" (Errores)
+        versionName = "1.2" //Version de la apliacion "Primera" (Cambios) + "Segunda" (Errores)
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
